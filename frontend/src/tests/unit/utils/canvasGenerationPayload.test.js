@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildCanvasGenerationPayload } from '@/utils/canvasGenerationPayload'
 
 describe('buildCanvasGenerationPayload', () => {
-  it('defaults image aspect ratio to 16:9 when unset', () => {
+  it('defaults image size and count when unset', () => {
     const payload = buildCanvasGenerationPayload({
       item: {
         item_type: 'image',
@@ -19,7 +19,9 @@ describe('buildCanvasGenerationPayload', () => {
     })
 
     expect(payload.options).toMatchObject({
-      aspect_ratio: '16:9'
+      aspect_ratio: '1:1',
+      image_size: '1024x1024',
+      n: 1
     })
   })
 
@@ -41,7 +43,9 @@ describe('buildCanvasGenerationPayload', () => {
     })
 
     expect(payload.options).toMatchObject({
-      aspect_ratio: '3:4'
+      aspect_ratio: '3:4',
+      image_size: '1024x1024',
+      n: 1
     })
   })
 
@@ -72,6 +76,8 @@ describe('buildCanvasGenerationPayload', () => {
 
     expect(payload.options).toMatchObject({
       aspect_ratio: '9:16',
+      duration: 5,
+      duration_seconds: 5,
       reference_image_urls: ['uploads/reference.png']
     })
   })
@@ -93,7 +99,9 @@ describe('buildCanvasGenerationPayload', () => {
     })
 
     expect(payload.options).toMatchObject({
-      aspect_ratio: '16:9'
+      aspect_ratio: '16:9',
+      duration: 5,
+      duration_seconds: 5
     })
   })
 })

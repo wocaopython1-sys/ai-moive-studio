@@ -63,6 +63,24 @@ class VectorEngineProvider:
                 normalized["cover_image_url"] = first_video["cover_image_url"]
         return normalized
 
+    def _bigmodel_size_from_aspect_ratio(self, aspect_ratio: str) -> str:
+        ratio = str(aspect_ratio or "").strip()
+        if ratio == "9:16":
+            return "720x1280"
+        if ratio == "1:1":
+            return "1024x1024"
+        return "1280x720"
+
+    def _parse_json_response(self, response: httpx.Response, label: str) -> Dict[str, Any]:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            snippet = response.text[:300].strip()
+            raise ValueError(f"{label} 返回非 JSON 响应: HTTP {response.status_code} {snippet}") from exc
+        if self._is_bigmodel():
+            return self._normalize_bigmodel_payload(payload)
+        return payload
+
     @log_provider_call("create_video")
     async def create_video(
         self, 
@@ -79,10 +97,18 @@ class VectorEngineProvider:
         """
         if self._is_bigmodel():
             url = f"{self._bigmodel_root()}/videos/generations"
+            duration_value = kwargs.get("duration") or kwargs.get("duration_seconds")
+            size_value = kwargs.get("size") or self._bigmodel_size_from_aspect_ratio(aspect_ratio)
             payload = {
                 "model": model or "cogvideox-3",
                 "prompt": prompt,
+                "size": size_value,
             }
+            if duration_value:
+                try:
+                    payload["duration"] = max(5, min(int(duration_value), 10))
+                except (TypeError, ValueError):
+                    pass
             if images:
                 payload["image_url"] = images[0]
 
@@ -90,7 +116,7 @@ class VectorEngineProvider:
                 try:
                     response = await client.post(url, headers=self.headers, json=payload)
                     response.raise_for_status()
-                    return self._normalize_bigmodel_payload(response.json())
+                    return self._parse_json_response(response, "BigModel Create")
                 except httpx.HTTPStatusError as e:
                     logger.error(f"BigModel Create Failed: {e.response.text}")
                     raise
@@ -113,7 +139,7 @@ class VectorEngineProvider:
             try:
                 response = await client.post(url, headers=self.headers, json=payload)
                 response.raise_for_status()
-                return response.json()
+                return self._parse_json_response(response, "Vector Engine Create")
             except httpx.HTTPStatusError as e:
                 logger.error(f"Vector Engine Create Failed: {e.response.text}")
                 raise

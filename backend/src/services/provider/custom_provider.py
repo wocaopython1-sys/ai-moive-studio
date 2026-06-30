@@ -60,6 +60,16 @@ class CustomProvider(BaseLLMProvider):
             gemini_kwargs = dict(kwargs)
             aspect_ratio = str(gemini_kwargs.pop("aspect_ratio", "") or "").strip()
             image_size = str(gemini_kwargs.pop("image_size", "") or "").strip()
+            gemini_kwargs.pop("size", None)
+            gemini_kwargs.pop("n", None)
+            if image_size in {"1024x1024", "1024x1536", "1536x1024"}:
+                if not aspect_ratio:
+                    aspect_ratio = {
+                        "1024x1024": "1:1",
+                        "1024x1536": "3:4",
+                        "1536x1024": "4:3",
+                    }[image_size]
+                image_size = "1K"
             if aspect_ratio:
                 gemini_kwargs["aspectRatio"] = aspect_ratio
             if image_size:
@@ -75,6 +85,13 @@ class CustomProvider(BaseLLMProvider):
             # OpenAI-compatible image endpoints such as gpt-image-* do not accept
             # AICON's canvas-level aspect_ratio/image_size/reference_images fields.
             openai_kwargs = dict(kwargs)
+            if "size" not in openai_kwargs and openai_kwargs.get("image_size"):
+                openai_kwargs["size"] = openai_kwargs.get("image_size")
+            if "n" in openai_kwargs:
+                try:
+                    openai_kwargs["n"] = max(1, min(int(openai_kwargs["n"]), 4))
+                except (TypeError, ValueError):
+                    openai_kwargs.pop("n", None)
             for unsupported_key in ("aspect_ratio", "image_size", "reference_images"):
                 openai_kwargs.pop(unsupported_key, None)
             return await self.client.images.generate(

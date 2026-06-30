@@ -148,6 +148,20 @@
               :value="option"
             />
           </el-select>
+          <el-select
+            class="tool-select tool-select--ratio"
+            :model-value="draft.durationSeconds"
+            placeholder="时长"
+            :disabled="generating || uploading"
+            @change="$emit('update:duration-seconds', Number($event || 5))"
+          >
+            <el-option
+              v-for="option in durationOptions"
+              :key="option"
+              :label="`${option} 秒`"
+              :value="option"
+            />
+          </el-select>
         </div>
         <div class="toolbar-right">
           <button
@@ -235,7 +249,8 @@
     apiKeyOptions: { type: Array, default: () => [] },
     modelOptions: { type: Array, default: () => [] },
     modelOptionsLoading: { type: Boolean, default: false },
-    aspectRatioOptions: { type: Array, default: () => [] }
+    aspectRatioOptions: { type: Array, default: () => [] },
+    durationOptions: { type: Array, default: () => [] }
   })
 
   const emit = defineEmits([
@@ -250,6 +265,7 @@
     'download',
     'update:api-key-id',
     'update:aspect-ratio',
+    'update:duration-seconds',
     'update:model-id',
     'update:title',
     'update:tokens',

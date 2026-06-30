@@ -89,6 +89,8 @@
         :model-options="imageModelOptions"
         :model-options-loading="catalogLoading"
         :aspect-ratio-options="imageAspectRatioOptions"
+        :image-size-options="imageSizeOptions"
+        :image-count-options="imageCountOptions"
         @focus-item="handleFocusItem"
         @drag-node="startStudioNodeDrag"
         @handle-drag="handleStudioHandleDrag"
@@ -96,6 +98,8 @@
         @update:api-key-id="patchGenerationConfig({ api_key_id: $event })"
         @update:model-id="patchGenerationConfig({ model: $event })"
         @update:aspect-ratio="patchSelectedContent({ aspectRatio: $event })"
+        @update:image-size="patchSelectedContent({ imageSize: $event })"
+        @update:image-count="patchSelectedContent({ imageCount: $event })"
         @update:tokens="updatePromptTokens($event)"
         @generate="handleGenerate"
         @history="openHistoryDrawer()"
@@ -123,6 +127,7 @@
         :model-options="videoModelOptions"
         :model-options-loading="catalogLoading"
         :aspect-ratio-options="videoAspectRatioOptions"
+        :duration-options="videoDurationOptions"
         @focus-item="handleFocusItem"
         @drag-node="startStudioNodeDrag"
         @handle-drag="handleStudioHandleDrag"
@@ -130,6 +135,7 @@
         @update:api-key-id="patchGenerationConfig({ api_key_id: $event })"
         @update:model-id="patchGenerationConfig({ model: $event })"
         @update:aspect-ratio="patchGenerationConfig({ aspectRatio: $event })"
+        @update:duration-seconds="patchGenerationConfig({ durationSeconds: $event })"
         @update:tokens="updatePromptTokens($event)"
         @generate="handleGenerate"
         @history="openHistoryDrawer()"
@@ -405,6 +411,13 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   import { fileService } from '@/services/upload'
   import {
     DEFAULT_ASPECT_RATIO,
+    DEFAULT_IMAGE_ASPECT_RATIO,
+    DEFAULT_IMAGE_COUNT,
+    DEFAULT_IMAGE_SIZE,
+    DEFAULT_VIDEO_DURATION_SECONDS,
+    IMAGE_COUNT_OPTIONS,
+    IMAGE_SIZE_OPTIONS,
+    VIDEO_DURATION_OPTIONS,
     buildCanvasGenerationPayload,
     getSupportedVideoAspectRatios,
     IMAGE_ASPECT_RATIO_OPTIONS,
@@ -728,8 +741,14 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
         (styleReferenceObjectKey ? '已选择风格参考' : ''),
       styleReferencePreviewUrl: styleReferencePreview.url || '',
       aspectRatio: String(
-        selectedItem.value.content?.aspectRatio || DEFAULT_ASPECT_RATIO || ''
+        selectedItem.value.content?.aspectRatio || DEFAULT_IMAGE_ASPECT_RATIO || ''
       ).trim(),
+      imageSize: String(
+        selectedItem.value.content?.imageSize || DEFAULT_IMAGE_SIZE || ''
+      ).trim(),
+      imageCount: Number(
+        selectedItem.value.content?.imageCount || DEFAULT_IMAGE_COUNT
+      ),
       apiKeyId: selectedItem.value.generation_config?.api_key_id || '',
       model: selectedItem.value.generation_config?.model || '',
       ...normalizePromptTokens(resolveInitialPromptTokens(selectedItem.value))
@@ -744,6 +763,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       aspectRatio: normalizeVideoAspectRatio(
         selectedItem.value.generation_config?.model || '',
         selectedItem.value.generation_config?.aspectRatio || ''
+      ),
+      durationSeconds: Number(
+        selectedItem.value.generation_config?.durationSeconds ||
+          DEFAULT_VIDEO_DURATION_SECONDS
       ),
       apiKeyId: selectedItem.value.generation_config?.api_key_id || '',
       model: selectedItem.value.generation_config?.model || '',
@@ -764,6 +787,13 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   const defaultCanvasApiKeyId = computed(
     () => String(apiKeyOptions.value[0]?.value || '').trim()
   )
+  const defaultVideoApiKeyId = computed(() => {
+    const videoKey = apiKeyOptions.value.find((option) => {
+      const haystack = `${option.label || ''} ${option.baseUrl || ''}`.toLowerCase()
+      return haystack.includes('bigmodel') || haystack.includes('video')
+    })
+    return String(videoKey?.value || defaultCanvasApiKeyId.value || '').trim()
+  })
   const defaultImageModel = computed(
     () => String(imageModelOptions.value[0] || '').trim()
   )
@@ -771,6 +801,9 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     () => String(videoModelOptions.value[0] || '').trim()
   )
   const imageAspectRatioOptions = IMAGE_ASPECT_RATIO_OPTIONS
+  const imageSizeOptions = IMAGE_SIZE_OPTIONS
+  const imageCountOptions = IMAGE_COUNT_OPTIONS
+  const videoDurationOptions = VIDEO_DURATION_OPTIONS
   const videoAspectRatioOptions = computed(() =>
     getSupportedVideoAspectRatios(
       selectedItem.value?.generation_config?.model || ''
@@ -781,7 +814,8 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     if (type !== 'image' && type !== 'video') {
       return {}
     }
-    const apiKeyId = defaultCanvasApiKeyId.value
+    const apiKeyId =
+      type === 'video' ? defaultVideoApiKeyId.value : defaultCanvasApiKeyId.value
     const model =
       type === 'image' ? defaultImageModel.value : defaultVideoModel.value
     const config = {}
@@ -790,6 +824,9 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     }
     if (model) {
       config.model = model
+    }
+    if (type === 'video') {
+      config.durationSeconds = DEFAULT_VIDEO_DURATION_SECONDS
     }
     return config
   }
@@ -1668,7 +1705,9 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
 
       apiKeyOptions.value = (apiKeysResponse?.api_keys || []).map((key) => ({
         value: key.id,
-        label: `${key.name} (${key.provider})`
+        label: `${key.name} (${key.provider})`,
+        provider: key.provider,
+        baseUrl: key.base_url || ''
       }))
 
       modelCatalog.value = {

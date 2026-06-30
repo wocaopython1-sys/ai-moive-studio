@@ -69,7 +69,9 @@
           <h2>{{ task.title || '未命名任务' }}</h2>
           <p class="task-meta">
             <span>{{ task.canvas_title || task.canvas_id }}</span>
+            <span v-if="task.provider">Provider：{{ task.provider }}</span>
             <span v-if="task.model">模型：{{ task.model }}</span>
+            <span v-if="formatTaskParams(task)">参数：{{ formatTaskParams(task) }}</span>
             <span>{{ formatTime(task.updated_at || task.created_at) }}</span>
           </p>
           <p v-if="task.error_message" class="task-error">
@@ -228,6 +230,22 @@ const formatTime = (value) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString()
+}
+
+const formatTaskParams = (task) => {
+  const params = task?.params || task?.request_payload?.options || {}
+  if (!params || typeof params !== 'object') return ''
+  const parts = []
+  const size = params.image_size || params.size
+  const ratio = params.aspect_ratio
+  const count = params.n
+  const duration = params.duration || params.duration_seconds
+  if (size) parts.push(`尺寸 ${size}`)
+  if (ratio) parts.push(`比例 ${ratio}`)
+  if (count) parts.push(`数量 ${count}`)
+  if (duration) parts.push(`时长 ${duration}s`)
+  if (params.reference_images) parts.push(`参考图 ${params.reference_images}`)
+  return parts.join(' / ')
 }
 
 const openDetail = async (task) => {

@@ -344,14 +344,11 @@ class APIKeyService(BaseService):
             elif model_type == "audio":
                 return ['gpt-4o-mini-tts', 'tts-1']
             elif model_type == "video":
-                return [
-                    'cogvideox-3',
-                    'veo3.1',
-                    'veo3.1-components',
-                    'veo3.1-fast',
-                    'veo3.1-4k',
-                    'veo3.1-components-4k'
-                ]
+                if 'bigmodel.cn' in base_url:
+                    return ['cogvideox-3']
+                # New API/OpenAI-compatible custom keys currently do not expose a verified
+                # /video/create endpoint for Canvas. Keep them out of the default video catalog.
+                return []
             else:  # text
                 if 'bigmodel.cn' in base_url:
                     return ['glm-5.2', 'glm-4.6', 'glm-4.5', 'glm-4-plus']

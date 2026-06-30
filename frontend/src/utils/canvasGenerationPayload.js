@@ -1,8 +1,15 @@
 import { buildPromptDerivatives } from '@/utils/promptMentionTokens'
 
 export const IMAGE_ASPECT_RATIO_OPTIONS = ['1:1', '3:4', '4:3', '16:9', '9:16']
+export const IMAGE_SIZE_OPTIONS = ['1024x1024', '1024x1536', '1536x1024']
+export const IMAGE_COUNT_OPTIONS = [1, 2, 3, 4]
 export const VIDEO_ASPECT_RATIO_OPTIONS = ['16:9', '9:16', '1:1']
+export const VIDEO_DURATION_OPTIONS = [5, 10]
 export const DEFAULT_ASPECT_RATIO = '16:9'
+export const DEFAULT_IMAGE_ASPECT_RATIO = '1:1'
+export const DEFAULT_IMAGE_SIZE = '1024x1024'
+export const DEFAULT_IMAGE_COUNT = 1
+export const DEFAULT_VIDEO_DURATION_SECONDS = 5
 
 export const getSupportedVideoAspectRatios = (modelName = '') => {
   const normalizedModelName = String(modelName || '')
@@ -84,6 +91,8 @@ export const buildCanvasGenerationPayload = ({
     const styleReferenceImageObjectKey =
       resolveStyleReferenceImageObjectKey(content)
     const aspectRatio = String(content.aspectRatio || '').trim()
+    const imageSize = String(content.imageSize || DEFAULT_IMAGE_SIZE).trim()
+    const imageCount = Number(content.imageCount || DEFAULT_IMAGE_COUNT)
 
     if (upstreamImageObjectKeys.length) {
       payload.options.reference_image_object_keys = upstreamImageObjectKeys
@@ -92,7 +101,21 @@ export const buildCanvasGenerationPayload = ({
       payload.options.style_reference_image_object_key =
         styleReferenceImageObjectKey
     }
-    payload.options.aspect_ratio = aspectRatio || DEFAULT_ASPECT_RATIO
+    payload.options.aspect_ratio = aspectRatio || DEFAULT_IMAGE_ASPECT_RATIO
+    payload.options.image_size = imageSize || DEFAULT_IMAGE_SIZE
+    payload.options.n = Number.isFinite(imageCount)
+      ? Math.min(Math.max(Math.trunc(imageCount), 1), 4)
+      : DEFAULT_IMAGE_COUNT
+  }
+
+  if (item?.item_type === 'video') {
+    const durationSeconds = Number(
+      item?.generation_config?.durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS
+    )
+    if (Number.isFinite(durationSeconds)) {
+      payload.options.duration = Math.min(Math.max(Math.trunc(durationSeconds), 1), 10)
+      payload.options.duration_seconds = payload.options.duration
+    }
   }
 
   if (!Object.keys(payload.options).length) {

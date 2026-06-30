@@ -137,6 +137,34 @@
               :value="option"
             />
           </el-select>
+          <el-select
+            class="tool-select tool-select--ratio"
+            :model-value="draft.imageSize"
+            placeholder="图片尺寸"
+            :disabled="generating || uploading"
+            @change="$emit('update:image-size', $event || '')"
+          >
+            <el-option
+              v-for="option in imageSizeOptions"
+              :key="option"
+              :label="option"
+              :value="option"
+            />
+          </el-select>
+          <el-select
+            class="tool-select tool-select--ratio"
+            :model-value="draft.imageCount"
+            placeholder="数量"
+            :disabled="generating || uploading"
+            @change="$emit('update:image-count', Number($event || 1))"
+          >
+            <el-option
+              v-for="option in imageCountOptions"
+              :key="option"
+              :label="`${option} 张`"
+              :value="option"
+            />
+          </el-select>
         </div>
         <div class="toolbar-right">
           <div class="toolbar-reference-group">
@@ -263,7 +291,9 @@
     apiKeyOptions: { type: Array, default: () => [] },
     modelOptions: { type: Array, default: () => [] },
     modelOptionsLoading: { type: Boolean, default: false },
-    aspectRatioOptions: { type: Array, default: () => [] }
+    aspectRatioOptions: { type: Array, default: () => [] },
+    imageSizeOptions: { type: Array, default: () => [] },
+    imageCountOptions: { type: Array, default: () => [] }
   })
 
   const emit = defineEmits([
@@ -279,6 +309,8 @@
     'create-video-from-image',
     'update:api-key-id',
     'update:aspect-ratio',
+    'update:image-size',
+    'update:image-count',
     'update:model-id',
     'update:title',
     'update:tokens',

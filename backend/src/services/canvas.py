@@ -691,7 +691,32 @@ class CanvasTaskHistoryService(BaseService):
             provider = provider_response.get("provider") or provider_response.get("provider_name")
             if provider:
                 return str(provider)
+        provider = result_payload.get("provider")
+        if provider:
+            return str(provider)
         return str(request_payload.get("provider") or "").strip()
+
+    def _params_summary_from_payloads(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
+        options = request_payload.get("options") or {}
+        if not isinstance(options, dict):
+            options = {}
+        summary: Dict[str, Any] = {}
+        for key in (
+            "image_size",
+            "size",
+            "aspect_ratio",
+            "n",
+            "duration",
+            "duration_seconds",
+        ):
+            value = options.get(key)
+            if value not in (None, "", []):
+                summary[key] = value
+        if options.get("reference_image_urls"):
+            summary["reference_images"] = len(options.get("reference_image_urls") or [])
+        if options.get("reference_image_object_keys"):
+            summary["reference_images"] = len(options.get("reference_image_object_keys") or [])
+        return summary
 
     def _generation_to_history_item(self, generation: CanvasItemGeneration, item: CanvasItem, document: CanvasDocument) -> Dict[str, Any]:
         request_payload = generation.request_payload_json or {}
@@ -723,6 +748,7 @@ class CanvasTaskHistoryService(BaseService):
             "error_message": generation.error_message or item.last_run_error or "",
             "provider": self._provider_from_payloads(request_payload, result_payload),
             "model": self._model_from_payloads(request_payload, item),
+            "params": self._params_summary_from_payloads(request_payload),
             "created_at": generation.created_at.isoformat() if generation.created_at else "",
             "updated_at": generation.updated_at.isoformat() if generation.updated_at else "",
             "request_payload": request_payload,
@@ -858,6 +884,74 @@ class CanvasTaskHistoryService(BaseService):
 
 
 class CanvasGenerationService(BaseService):
+    def _text_provider_options(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        options = request.get("options") or {}
+        if not isinstance(options, dict):
+            return {}
+        provider_options: Dict[str, Any] = {}
+        temperature = options.get("temperature")
+        if temperature not in (None, ""):
+            try:
+                provider_options["temperature"] = float(temperature)
+            except (TypeError, ValueError):
+                raise BusinessLogicError("temperature 参数必须是数字")
+        max_tokens = options.get("max_tokens")
+        if max_tokens not in (None, ""):
+            try:
+                provider_options["max_tokens"] = int(max_tokens)
+            except (TypeError, ValueError):
+                raise BusinessLogicError("max_tokens 参数必须是整数")
+        return provider_options
+
+    def _image_provider_options(self, request: Dict[str, Any], api_key: APIKey) -> Dict[str, Any]:
+        options = request.get("options") or {}
+        if not isinstance(options, dict):
+            options = {}
+        model = str(request.get("model") or "").lower()
+        base_url = str(api_key.base_url or "").lower()
+        provider_name = str(api_key.provider or "").lower()
+        provider_options: Dict[str, Any] = {}
+
+        aspect_ratio = str(options.get("aspect_ratio") or "").strip()
+        image_size = str(options.get("image_size") or options.get("size") or "").strip()
+        image_count = options.get("n")
+        if provider_name == "custom" and aspect_ratio:
+            provider_options["aspect_ratio"] = aspect_ratio
+        if image_size:
+            provider_options["size"] = image_size
+            if provider_name == "custom":
+                provider_options["image_size"] = image_size
+        if image_count not in (None, ""):
+            try:
+                provider_options["n"] = max(1, min(int(image_count), 4))
+            except (TypeError, ValueError):
+                raise BusinessLogicError("图片数量 n 必须是整数")
+
+        if "bigmodel.cn" in base_url or model.startswith(("glm-image", "cogview")):
+            if image_size:
+                provider_options["size"] = image_size
+            provider_options.pop("aspect_ratio", None)
+            provider_options.pop("image_size", None)
+        return provider_options
+
+    def _video_provider_options(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        options = request.get("options") or {}
+        if not isinstance(options, dict):
+            return {}
+        provider_options: Dict[str, Any] = {}
+        aspect_ratio = str(options.get("aspect_ratio") or "").strip()
+        if aspect_ratio:
+            provider_options["aspect_ratio"] = aspect_ratio
+        duration = options.get("duration") or options.get("duration_seconds")
+        if duration not in (None, ""):
+            try:
+                duration_seconds = int(duration)
+            except (TypeError, ValueError):
+                raise BusinessLogicError("视频时长参数必须是整数秒")
+            provider_options["duration"] = duration_seconds
+            provider_options["duration_seconds"] = duration_seconds
+        return provider_options
+
     def _extract_object_key_from_media_url(self, media_url: Any) -> str:
         return extract_object_key_from_media_url(media_url)
 
@@ -894,19 +988,28 @@ class CanvasGenerationService(BaseService):
             request = generation.request_payload_json or {}
             api_key = await self._resolve_api_key(str(generation.user_id), request, item)
             provider = self._build_provider(api_key)
+            text_kwargs = self._text_provider_options(request)
             response = await provider.completions(
                 model=request.get("model") or "gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "你是一个专业的中文创作助手。请直接输出适合写入画布节点的正文内容。"},
                     {"role": "user", "content": request["prompt"]},
                 ],
+                **text_kwargs,
             )
-            text = response.choices[0].message.content.strip()
+            text = self._extract_completion_text(response).strip()
+            if not text:
+                raise BusinessLogicError("文本模型未返回可写入内容")
             await canvas_service.update_generation(
                 generation,
                 item,
                 CanvasRunStatus.COMPLETED.value,
-                result_payload={"text": text},
+                result_payload={
+                    "text": text,
+                    "provider": api_key.provider,
+                    "model": request.get("model"),
+                    "options": request.get("options") or {},
+                },
             )
             await self.commit()
             return {"generation_id": generation_id, "status": CanvasRunStatus.COMPLETED.value, "text": text}
@@ -941,6 +1044,7 @@ class CanvasGenerationService(BaseService):
             request_payload = generation.request_payload_json or {}
             api_key = await self._resolve_api_key(str(generation.user_id), request_payload, item)
             provider = self._build_provider(api_key)
+            text_kwargs = self._text_provider_options(request_payload)
             stream = await provider.completions(
                 model=request_payload.get("model") or "gpt-4o-mini",
                 messages=[
@@ -948,6 +1052,7 @@ class CanvasGenerationService(BaseService):
                     {"role": "user", "content": request_payload["prompt"]},
                 ],
                 stream=True,
+                **text_kwargs,
             )
 
             async for delta in self._iterate_text_stream(stream):
@@ -970,7 +1075,12 @@ class CanvasGenerationService(BaseService):
                 generation,
                 item,
                 CanvasRunStatus.COMPLETED.value,
-                result_payload={"text": final_text},
+                result_payload={
+                    "text": final_text,
+                    "provider": api_key.provider,
+                    "model": request_payload.get("model"),
+                    "options": request_payload.get("options") or {},
+                },
             )
             await self.commit()
             await self.refresh(item)
@@ -1073,11 +1183,11 @@ class CanvasGenerationService(BaseService):
             request = generation.request_payload_json or {}
             api_key = await self._resolve_api_key(str(generation.user_id), request, item)
             provider = self._build_provider(api_key)
-            image_kwargs: Dict[str, Any] = {}
+            image_kwargs: Dict[str, Any] = self._image_provider_options(request, api_key)
             if api_key.provider.lower() == "custom":
                 options = request.get("options") or {}
                 aspect_ratio = str(options.get("aspect_ratio") or "").strip()
-                if aspect_ratio:
+                if aspect_ratio and "aspect_ratio" not in image_kwargs:
                     image_kwargs["aspect_ratio"] = aspect_ratio
                 reference_images = self._resolve_image_reference_inputs(
                     options.get("style_reference_image_object_key")
@@ -1102,6 +1212,9 @@ class CanvasGenerationService(BaseService):
                 CanvasRunStatus.COMPLETED.value,
                 result_payload={
                     "result_image_object_key": image_asset.get("object_key"),
+                    "provider": api_key.provider,
+                    "model": request.get("model"),
+                    "options": request.get("options") or {},
                 },
             )
             await self.commit()
@@ -1124,8 +1237,12 @@ class CanvasGenerationService(BaseService):
             await canvas_service.update_generation(generation, item, CanvasRunStatus.PROCESSING.value)
             request = generation.request_payload_json or {}
             api_key = await self._resolve_api_key(str(generation.user_id), request, item)
-            if api_key.provider.lower() not in {"vectorengine", "custom"}:
+            provider_name = api_key.provider.lower()
+            base_url = str(api_key.base_url or "").lower()
+            if provider_name not in {"vectorengine", "custom"}:
                 raise BusinessLogicError("当前 API Key 不支持视频生成")
+            if provider_name == "custom" and "bigmodel.cn" not in base_url:
+                raise BusinessLogicError("当前自定义 API Key 的视频 endpoint 未验证：返回 HTML 通常表示路径/上游不兼容。请使用 BigModel direct 视频 Key。")
 
             provider = VectorEngineProvider(
                 api_key=api_key.get_api_key(),
@@ -1139,7 +1256,7 @@ class CanvasGenerationService(BaseService):
             )
             provider_options = {
                 key: value
-                for key, value in options.items()
+                for key, value in self._video_provider_options(request).items()
                 if key not in {"reference_image_urls", "reference_text_ids"}
             }
             response = await provider.create_video(
@@ -1161,6 +1278,9 @@ class CanvasGenerationService(BaseService):
                         "provider_task_id": provider_task_id,
                         "provider_response": response,
                         "result_video_object_key": stored_video_asset.get("object_key"),
+                        "provider": api_key.provider,
+                        "model": request.get("model"),
+                        "options": request.get("options") or {},
                     },
                 )
                 await self.commit()
@@ -1173,7 +1293,13 @@ class CanvasGenerationService(BaseService):
                 generation,
                 item,
                 CanvasRunStatus.PROCESSING.value,
-                result_payload={"provider_task_id": provider_task_id, "provider_response": response},
+                result_payload={
+                    "provider_task_id": provider_task_id,
+                    "provider_response": response,
+                    "provider": api_key.provider,
+                    "model": request.get("model"),
+                    "options": request.get("options") or {},
+                },
             )
             await self.commit()
 
@@ -1191,6 +1317,9 @@ class CanvasGenerationService(BaseService):
                         "provider_task_id": provider_task_id,
                         "provider_response": response,
                         "timeout_waiting": True,
+                        "provider": api_key.provider,
+                        "model": request.get("model"),
+                        "options": request.get("options") or {},
                     },
                     error_message=None,
                 )
@@ -1206,7 +1335,13 @@ class CanvasGenerationService(BaseService):
                 generation,
                 item,
                 CanvasRunStatus.COMPLETED.value,
-                result_payload={"provider_task_id": provider_task_id, "result_video_object_key": stored_video_asset.get("object_key")},
+                result_payload={
+                    "provider_task_id": provider_task_id,
+                    "result_video_object_key": stored_video_asset.get("object_key"),
+                    "provider": api_key.provider,
+                    "model": request.get("model"),
+                    "options": request.get("options") or {},
+                },
             )
             await self.commit()
             return {"generation_id": generation_id, "status": CanvasRunStatus.COMPLETED.value, "result_video_object_key": stored_video_asset.get("object_key")}
@@ -1478,12 +1613,24 @@ class CanvasGenerationService(BaseService):
                 normalized["options"]["style_reference_image_object_key"] = style_reference_image_object_key
 
         if generation_type == CanvasGenerationType.VIDEO.value:
-            normalized["options"]["reference_image_urls"] = (
+            video_reference_object_keys = (
+                options.get("reference_image_object_keys")
+                or reference_image_object_keys
+                or []
+            )
+            reference_image_urls = (
                 options.get("reference_image_urls")
                 or self._collect_reference_image_urls(prompt_tokens, resolved_mentions)
                 or item.content_json.get("reference_image_urls")
                 or []
             )
+            if video_reference_object_keys:
+                normalized["options"]["reference_image_object_keys"] = video_reference_object_keys
+                reference_image_urls = [
+                    absolute_public_media_url_for_object_key(object_key)
+                    for object_key in video_reference_object_keys
+                ]
+            normalized["options"]["reference_image_urls"] = reference_image_urls
             normalized["options"]["reference_text_ids"] = (
                 options.get("reference_text_ids")
                 or reference_text_ids
@@ -1837,6 +1984,8 @@ class CanvasGenerationService(BaseService):
             yield fallback_text
 
     def _extract_text_delta(self, chunk: Any) -> str:
+        if isinstance(chunk, str):
+            return chunk
         choices = chunk.get("choices") if isinstance(chunk, dict) else getattr(chunk, "choices", None)
         if not choices:
             return ""
@@ -1848,6 +1997,8 @@ class CanvasGenerationService(BaseService):
         return self._normalize_completion_content(content)
 
     def _extract_completion_text(self, response: Any) -> str:
+        if isinstance(response, str):
+            return response
         choices = response.get("choices") if isinstance(response, dict) else getattr(response, "choices", None)
         if not choices:
             return ""
@@ -1959,10 +2110,11 @@ class CanvasGenerationService(BaseService):
         return resolved
 
     async def _resolve_image_result(self, response: Any, user_id: str) -> Dict[str, Any]:
-        image_data = response.data[0]
-        if hasattr(image_data, "url") and image_data.url:
+        image_data = self._first_image_result(response)
+        image_url = self._image_result_url(image_data)
+        if image_url:
             async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=20.0)) as client:
-                remote_response = await client.get(image_data.url)
+                remote_response = await client.get(image_url)
                 remote_response.raise_for_status()
             storage_client = await get_storage_client()
             file_id = str(uuid.uuid4())
@@ -1973,9 +2125,9 @@ class CanvasGenerationService(BaseService):
                 metadata={"user_id": user_id, "file_id": file_id, "file_type": remote_response.headers.get("content-type", "image/png")},
             )
             return {"object_key": storage["object_key"], "url": storage["url"]}
-        if hasattr(image_data, "b64_json") and image_data.b64_json:
-            content_type = getattr(image_data, "mime", "image/png")
-            raw = base64.b64decode(image_data.b64_json)
+        b64_value, content_type = self._image_result_b64(image_data)
+        if b64_value:
+            raw = base64.b64decode(b64_value)
             ext = "png" if "png" in content_type else "jpg"
             storage_client = await get_storage_client()
             file_id = str(uuid.uuid4())
@@ -1987,6 +2139,57 @@ class CanvasGenerationService(BaseService):
             )
             return {"object_key": storage["object_key"], "url": storage["url"]}
         raise BusinessLogicError("图片生成结果不包含可用图片")
+
+    def _first_image_result(self, response: Any) -> Any:
+        if isinstance(response, str):
+            stripped = response.strip()
+            if not stripped:
+                return response
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    return self._first_image_result(json.loads(stripped))
+                except json.JSONDecodeError:
+                    return stripped
+            return stripped
+        if isinstance(response, dict):
+            data = response.get("data")
+            if isinstance(data, list) and data:
+                return data[0]
+            for key in ("url", "b64_json", "base64", "image", "image_url"):
+                if response.get(key):
+                    return response
+        data = getattr(response, "data", None)
+        if isinstance(data, list) and data:
+            return data[0]
+        return response
+
+    def _image_result_url(self, image_data: Any) -> str:
+        if isinstance(image_data, str):
+            value = image_data.strip()
+            if value.startswith(("http://", "https://")):
+                return value
+            return ""
+        if isinstance(image_data, dict):
+            return str(image_data.get("url") or image_data.get("image_url") or "").strip()
+        return str(getattr(image_data, "url", "") or "").strip()
+
+    def _image_result_b64(self, image_data: Any) -> Tuple[str, str]:
+        if isinstance(image_data, str):
+            value = image_data.strip()
+            if value.startswith("data:image/") and "," in value:
+                header, payload = value.split(",", 1)
+                content_type = header.split(";", 1)[0].replace("data:", "") or "image/png"
+                return payload.strip(), content_type
+            if value and not value.startswith(("http://", "https://")):
+                return value, "image/png"
+            return "", "image/png"
+        if isinstance(image_data, dict):
+            value = str(image_data.get("b64_json") or image_data.get("base64") or image_data.get("image") or "").strip()
+            content_type = str(image_data.get("mime") or image_data.get("mime_type") or "image/png")
+            return value, content_type
+        value = str(getattr(image_data, "b64_json", "") or "").strip()
+        content_type = str(getattr(image_data, "mime", "image/png") or "image/png")
+        return value, content_type
 
     async def _store_remote_video(self, video_url: str, user_id: str) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=20.0)) as client:

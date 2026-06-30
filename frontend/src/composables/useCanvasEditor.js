@@ -1,6 +1,12 @@
 import { computed, ref } from 'vue'
 import { canvasService } from '@/services/canvas'
-import { DEFAULT_ASPECT_RATIO } from '@/utils/canvasGenerationPayload'
+import {
+  DEFAULT_ASPECT_RATIO,
+  DEFAULT_IMAGE_ASPECT_RATIO,
+  DEFAULT_IMAGE_COUNT,
+  DEFAULT_IMAGE_SIZE,
+  DEFAULT_VIDEO_DURATION_SECONDS
+} from '@/utils/canvasGenerationPayload'
 
 const DEFAULT_CONTENT = {
   text: () => ({ text: '', text_preview: '', prompt: '', promptTokens: [] }),
@@ -9,7 +15,9 @@ const DEFAULT_CONTENT = {
     result_image_url: '',
     reference_image_url: '',
     style_reference_image_object_key: '',
-    aspectRatio: DEFAULT_ASPECT_RATIO,
+    aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+    imageSize: DEFAULT_IMAGE_SIZE,
+    imageCount: DEFAULT_IMAGE_COUNT,
     promptTokens: []
   }),
   video: () => ({
@@ -281,7 +289,12 @@ export function useCanvasEditor() {
         ...initialContent
       },
       generation_config: {
-        ...(itemType === 'video' ? { aspectRatio: DEFAULT_ASPECT_RATIO } : {}),
+        ...(itemType === 'video'
+          ? {
+              aspectRatio: DEFAULT_ASPECT_RATIO,
+              durationSeconds: DEFAULT_VIDEO_DURATION_SECONDS
+            }
+          : {}),
         ...initialGenerationConfig
       },
       last_run_status: options?.last_run_status || 'idle',
