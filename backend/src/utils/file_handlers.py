@@ -38,6 +38,9 @@ class FileHandler:
         'image/gif': 'image',
         'image/webp': 'image',
         'image/bmp': 'image',
+        # 视频类型
+        'video/mp4': 'video',
+        'video/quicktime': 'video',
     }
 
     # 文件扩展名映射
@@ -54,6 +57,9 @@ class FileHandler:
         '.gif': 'image',
         '.webp': 'image',
         '.bmp': 'image',
+        # 视频扩展名
+        '.mp4': 'video',
+        '.mov': 'video',
     }
 
     # 文件类型配置（整合自validators.py的有用配置）
@@ -87,6 +93,12 @@ class FileHandler:
             'extensions': ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'],
             'max_size': 10 * 1024 * 1024,  # 10MB
             'description': '图片文件'
+        },
+        'video': {
+            'mime_types': ['video/mp4', 'video/quicktime'],
+            'extensions': ['.mp4', '.mov'],
+            'max_size': 500 * 1024 * 1024,  # 500MB
+            'description': '视频文件'
         }
     }
 

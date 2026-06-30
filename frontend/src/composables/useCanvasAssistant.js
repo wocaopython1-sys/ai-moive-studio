@@ -23,6 +23,8 @@ export function useCanvasAssistant({
   const currentTurnId = ref(0)
   const abortController = ref(null)
   const lastRefreshSignature = ref('')
+  const quickActionLoading = ref(false)
+  const assistantDraft = ref(null)
 
   const resolvedDocumentId = computed(() => String(documentId?.value ?? documentId ?? '').trim())
   const reducedState = computed(() =>
@@ -216,6 +218,100 @@ export function useCanvasAssistant({
     return true
   }
 
+  const runQuickAction = async ({ action = '', selectedItem = null, userInput = '' } = {}) => {
+    const normalizedAction = String(action || '').trim()
+    if (!normalizedAction || quickActionLoading.value || !resolvedDocumentId.value) {
+      return null
+    }
+
+    try {
+      await ensureChatContextReady()
+    } catch (contextError) {
+      runtimeError.value = contextError?.message || '缺少对话 Key 或对话模型'
+      return null
+    }
+
+    quickActionLoading.value = true
+    runtimeError.value = ''
+    try {
+      const response = await service.suggest({
+        canvasId: resolvedDocumentId.value,
+        selectedItemId: selectedItem?.id || '',
+        action: normalizedAction,
+        userInput,
+        apiKeyId: selectedApiKeyId.value,
+        chatModelId: selectedChatModelId.value
+      })
+      assistantDraft.value = response
+      currentTurnId.value += 1
+      appendEvent({
+        kind: 'message',
+        message: {
+          id: buildMessageId('assistant-suggest', currentTurnId.value),
+          role: 'assistant',
+          content: response?.text || '',
+          order: messages.value.length + 1
+        }
+      })
+      return response
+    } catch (quickError) {
+      runtimeError.value = quickError?.message || '助手生成建议失败'
+      appendEvent({ kind: 'error', message: runtimeError.value })
+      return null
+    } finally {
+      quickActionLoading.value = false
+    }
+  }
+
+  const applySuggestion = async ({
+    mode = 'create_text_node',
+    selectedItem = null,
+    title = '',
+    content = '',
+    relationSourceItemId = '',
+    position = null
+  } = {}) => {
+    const text = String(content || assistantDraft.value?.text || '').trim()
+    if (!text || !resolvedDocumentId.value) {
+      return null
+    }
+    quickActionLoading.value = true
+    runtimeError.value = ''
+    try {
+      const response = await service.apply({
+        canvasId: resolvedDocumentId.value,
+        selectedItemId: selectedItem?.id || '',
+        mode,
+        title: title || assistantDraft.value?.suggested_title || '助手建议',
+        content: text,
+        relationSourceItemId,
+        positionX: position?.position_x,
+        positionY: position?.position_y
+      })
+      assistantDraft.value = {
+        ...(assistantDraft.value || {}),
+        appliedItem: response?.item || null,
+        appliedConnection: response?.connection || null
+      }
+      await Promise.resolve(
+        onMutationApplied?.({
+          action: 'assistant_apply_result',
+          documentId: resolvedDocumentId.value,
+          item: response?.item || null,
+          connection: response?.connection || null,
+          mode
+        })
+      )
+      return response
+    } catch (applyError) {
+      runtimeError.value = applyError?.message || '助手写回失败'
+      appendEvent({ kind: 'error', message: runtimeError.value })
+      return null
+    } finally {
+      quickActionLoading.value = false
+    }
+  }
+
   const updatePendingInterruptModelId = (selectedModelId) => {
     if (!pendingInterrupt.value) return
     pendingInterruptSelectedModelId.value = String(selectedModelId || '').trim()
@@ -252,6 +348,7 @@ export function useCanvasAssistant({
     sessionId.value = ''
     runtimeError.value = ''
     eventLog.value = []
+    assistantDraft.value = null
     pendingInterruptSelectedModelId.value = ''
     currentTurnId.value = 0
     lastRefreshSignature.value = ''
@@ -274,11 +371,15 @@ export function useCanvasAssistant({
     chatModelOptions,
     selectedApiKeyId,
     selectedChatModelId,
+    assistantDraft,
+    quickActionLoading,
     isStreaming,
     canSend,
     activeTool,
     refreshRequest,
     sendMessage,
+    runQuickAction,
+    applySuggestion,
     updateSelectedApiKeyId: async (apiKeyId) => {
       selectedApiKeyId.value = String(apiKeyId || '').trim()
       await loadChatModels(selectedApiKeyId.value)

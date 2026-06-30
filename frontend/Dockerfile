@@ -38,7 +38,7 @@ RUN chown -R nginx:nginx /usr/share/nginx/html && \
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:80/ || exit 1
+    CMD wget --quiet --tries=1 --spider http://127.0.0.1:80/ || exit 1
 
 # 暴露端口
 EXPOSE 80

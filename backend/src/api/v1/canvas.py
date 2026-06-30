@@ -40,28 +40,25 @@ from src.services.canvas import (
     extract_object_key_from_media_url,
 )
 from src.tasks.canvas import generate_canvas_image, generate_canvas_text, generate_canvas_video
-from src.utils.storage import get_storage_client
+from src.utils.media_urls import media_url_for_object_key
 
 router = APIRouter()
 
 
 async def resolve_canvas_media_fields(payload: dict) -> dict:
     content = dict(payload or {})
-    storage_client = get_storage_client()
-    if inspect.isawaitable(storage_client):
-        storage_client = await storage_client
 
     image_object_key = str(content.get("result_image_object_key") or "").strip()
     if image_object_key:
-        content["result_image_url"] = storage_client.get_presigned_url(image_object_key)
+        content["result_image_url"] = media_url_for_object_key(image_object_key)
 
     reference_image_object_key = str(content.get("reference_image_object_key") or "").strip()
     if reference_image_object_key:
-        content["reference_image_url"] = storage_client.get_presigned_url(reference_image_object_key)
+        content["reference_image_url"] = media_url_for_object_key(reference_image_object_key)
 
     video_object_key = str(content.get("result_video_object_key") or "").strip()
     if video_object_key:
-        content["result_video_url"] = storage_client.get_presigned_url(video_object_key)
+        content["result_video_url"] = media_url_for_object_key(video_object_key)
 
     prompt_tokens = content.get("promptTokens")
     if isinstance(prompt_tokens, list):
@@ -78,7 +75,7 @@ async def resolve_canvas_media_fields(payload: dict) -> dict:
                 ).strip()
                 if object_key:
                     resolved_token["nodePreviewObjectKeySnapshot"] = object_key
-                    resolved_token["nodePreviewUrlSnapshot"] = storage_client.get_presigned_url(object_key)
+                    resolved_token["nodePreviewUrlSnapshot"] = media_url_for_object_key(object_key)
             resolved_tokens.append(resolved_token)
         content["promptTokens"] = resolved_tokens
 
@@ -102,7 +99,7 @@ async def resolve_canvas_media_fields(payload: dict) -> dict:
                 ).strip()
                 if object_key:
                     resolved_payload["object_key"] = object_key
-                    resolved_payload["url"] = storage_client.get_presigned_url(object_key)
+                    resolved_payload["url"] = media_url_for_object_key(object_key)
                 resolved_mention["resolvedContent"] = resolved_payload
             resolved_mentions.append(resolved_mention)
         content[mention_field] = resolved_mentions

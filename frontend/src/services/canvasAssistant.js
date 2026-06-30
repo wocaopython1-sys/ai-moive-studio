@@ -183,6 +183,35 @@ const postAssistantStream = async (path, payload = {}, handlers = {}) => {
   return consumeAssistantSse(response, handlers)
 }
 
+const postAssistantJson = async (path, payload = {}, options = {}) => {
+  const headers = new Headers(options.headers || {})
+  headers.set('Accept', 'application/json')
+  headers.set('Content-Type', 'application/json')
+  const accessToken = getAccessToken()
+  if (accessToken && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${accessToken}`)
+  }
+
+  const response = await fetch(`${apiBase}${path}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    body: JSON.stringify(stripUndefinedEntries(payload)),
+    signal: options.signal,
+    headers
+  })
+  if (!response?.ok) {
+    let detail = ''
+    try {
+      const errorPayload = await response.json()
+      detail = errorPayload?.detail || errorPayload?.message || ''
+    } catch {
+      detail = ''
+    }
+    throw new Error(detail || `canvas assistant request failed (${response?.status || 'network'})`)
+  }
+  return response.json()
+}
+
 const buildChatPayload = (payload = {}) => ({
   document_id: String(payload.documentId || payload.document_id || '').trim(),
   session_id: String(payload.sessionId || payload.session_id || '').trim() || undefined,
@@ -199,12 +228,38 @@ const buildResumePayload = (payload = {}) => ({
   selected_model_id: String(payload.selectedModelId || payload.selected_model_id || '').trim() || undefined
 })
 
+const buildSuggestPayload = (payload = {}) => ({
+  canvas_id: String(payload.canvasId || payload.canvas_id || payload.documentId || payload.document_id || '').trim(),
+  selected_item_id: String(payload.selectedItemId || payload.selected_item_id || '').trim() || undefined,
+  action: String(payload.action || '').trim(),
+  user_input: String(payload.userInput || payload.user_input || '').trim() || undefined,
+  api_key_id: String(payload.apiKeyId || payload.api_key_id || '').trim() || undefined,
+  chat_model_id: String(payload.chatModelId || payload.chat_model_id || '').trim() || undefined
+})
+
+const buildApplyPayload = (payload = {}) => ({
+  canvas_id: String(payload.canvasId || payload.canvas_id || payload.documentId || payload.document_id || '').trim(),
+  selected_item_id: String(payload.selectedItemId || payload.selected_item_id || '').trim() || undefined,
+  mode: String(payload.mode || '').trim(),
+  title: String(payload.title || '').trim() || undefined,
+  content: String(payload.content || '').trim(),
+  relation_source_item_id: String(payload.relationSourceItemId || payload.relation_source_item_id || '').trim() || undefined,
+  position_x: Number.isFinite(Number(payload.positionX ?? payload.position_x)) ? Number(payload.positionX ?? payload.position_x) : undefined,
+  position_y: Number.isFinite(Number(payload.positionY ?? payload.position_y)) ? Number(payload.positionY ?? payload.position_y) : undefined
+})
+
 export const canvasAssistantService = {
   chat(payload = {}, handlers = {}) {
     return postAssistantStream('/canvas-assistant/chat', buildChatPayload(payload), handlers)
   },
   resume(payload = {}, handlers = {}) {
     return postAssistantStream('/canvas-assistant/resume', buildResumePayload(payload), handlers)
+  },
+  suggest(payload = {}, options = {}) {
+    return postAssistantJson('/canvas-assistant/suggest', buildSuggestPayload(payload), options)
+  },
+  apply(payload = {}, options = {}) {
+    return postAssistantJson('/canvas-assistant/apply', buildApplyPayload(payload), options)
   }
 }
 

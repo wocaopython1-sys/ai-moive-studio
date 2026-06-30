@@ -73,6 +73,11 @@ class FileInfo(BaseModel):
     last_modified: Optional[str] = Field(None, description="最后修改时间")
     url: Optional[str] = Field(None, description="访问URL")
     is_orphaned: bool = Field(False, description="是否为孤立文件")
+    media_type: Optional[str] = Field(None, description="媒体类型：image/video")
+    mime_type: Optional[str] = Field(None, description="MIME类型")
+    preview_url: Optional[str] = Field(None, description="预览URL")
+    download_url: Optional[str] = Field(None, description="下载URL")
+    stream_url: Optional[str] = Field(None, description="流式播放URL")
 
     model_config = {
         "json_schema_extra": {

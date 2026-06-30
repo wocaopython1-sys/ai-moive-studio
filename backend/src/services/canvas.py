@@ -31,6 +31,7 @@ from src.services.api_key import APIKeyService
 from src.services.base import BaseService
 from src.services.provider.factory import ProviderFactory
 from src.services.provider.vector_engine_provider import VectorEngineProvider
+from src.utils.media_urls import media_url_for_object_key
 from src.utils.storage import get_storage_client
 
 logger = get_logger(__name__)
@@ -49,6 +50,25 @@ MEDIA_URL_TO_OBJECT_KEY_FIELDS = {
     "reference_image_url": "reference_image_object_key",
     "result_video_url": "result_video_object_key",
 }
+
+
+def absolute_public_media_url_for_object_key(object_key: str) -> str:
+    base_url = str(settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
+    media_path = media_url_for_object_key(object_key)
+    if base_url and media_path:
+        return f"{base_url}{media_path}"
+    return media_path
+
+
+def is_likely_celery_task_id(value: Any, generation_id: str) -> bool:
+    task_id = str(value or "").strip()
+    if not task_id:
+        return False
+    if task_id == str(generation_id):
+        return False
+    if task_id.startswith("20"):
+        return False
+    return bool(re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", task_id))
 
 
 def extract_object_key_from_media_url(media_url: Any) -> str:
@@ -494,6 +514,10 @@ class CanvasService(BaseService):
         await self.refresh(item)
         return generation
 
+    def _has_successful_video_result(self, generation: CanvasItemGeneration) -> bool:
+        payload = generation.result_payload_json or {}
+        return bool(payload.get("result_video_object_key"))
+
     def _apply_generation_output(self, item_type: str, content: Dict[str, Any], result_payload: Dict[str, Any]) -> Dict[str, Any]:
         next_content = dict(content or {})
         if item_type == CanvasItemType.TEXT.value and result_payload.get("text"):
@@ -590,6 +614,10 @@ class CanvasService(BaseService):
 class CanvasGenerationService(BaseService):
     def _extract_object_key_from_media_url(self, media_url: Any) -> str:
         return extract_object_key_from_media_url(media_url)
+
+    def _has_successful_video_result(self, generation: CanvasItemGeneration) -> bool:
+        payload = generation.result_payload_json or {}
+        return bool(payload.get("result_video_object_key"))
 
     async def prepare_text_generation(self, item_id: str, user_id: str, request: Dict[str, Any]) -> Tuple[CanvasItem, CanvasItemGeneration]:
         return await self._prepare_generation(item_id, user_id, CanvasGenerationType.TEXT.value, request)
@@ -748,6 +776,7 @@ class CanvasGenerationService(BaseService):
 
         last_signature = self._generation_stream_signature(generation)
         elapsed = 0.0
+        heartbeat_elapsed = 0.0
         final_statuses = {CanvasRunStatus.COMPLETED.value, CanvasRunStatus.FAILED.value}
 
         while elapsed <= timeout_seconds:
@@ -756,11 +785,13 @@ class CanvasGenerationService(BaseService):
 
             await asyncio.sleep(poll_interval_seconds)
             elapsed += poll_interval_seconds
+            heartbeat_elapsed += poll_interval_seconds
             generation, item = await self._reload_generation_and_item(generation_id)
             signature = self._generation_stream_signature(generation)
-            if signature == last_signature:
+            if signature == last_signature and heartbeat_elapsed < 15:
                 continue
 
+            heartbeat_elapsed = 0.0
             last_signature = signature
             payload = await self._build_generation_stream_payload(generation, item)
             if generation.status == CanvasRunStatus.COMPLETED.value:
@@ -856,7 +887,10 @@ class CanvasGenerationService(BaseService):
             )
             options = request.get("options") or {}
             reference_images = options.get("reference_image_urls") or item.content_json.get("reference_image_urls") or []
-            provider_images = await self._resolve_video_reference_images(reference_images)
+            provider_images = await self._resolve_video_reference_images(
+                reference_images,
+                prefer_public_urls=provider._is_bigmodel(),
+            )
             provider_options = {
                 key: value
                 for key, value in options.items()
@@ -895,8 +929,32 @@ class CanvasGenerationService(BaseService):
                 CanvasRunStatus.PROCESSING.value,
                 result_payload={"provider_task_id": provider_task_id, "provider_response": response},
             )
+            await self.commit()
 
-            video_url = await self._poll_video_result(provider, provider_task_id)
+            try:
+                video_url = await self._poll_video_result(provider, provider_task_id)
+            except BusinessLogicError as exc:
+                if "超时" not in str(exc):
+                    raise
+                logger.warning("Canvas video generation kept processing after provider timeout: %s", generation_id)
+                await canvas_service.update_generation(
+                    generation,
+                    item,
+                    CanvasRunStatus.PROCESSING.value,
+                    result_payload={
+                        "provider_task_id": provider_task_id,
+                        "provider_response": response,
+                        "timeout_waiting": True,
+                    },
+                    error_message=None,
+                )
+                await self.commit()
+                return {
+                    "generation_id": generation_id,
+                    "status": CanvasRunStatus.PROCESSING.value,
+                    "provider_task_id": provider_task_id,
+                    "timeout_waiting": True,
+                }
             stored_video_asset = await self._store_remote_video(video_url, str(generation.user_id))
             await canvas_service.update_generation(
                 generation,
@@ -907,6 +965,20 @@ class CanvasGenerationService(BaseService):
             await self.commit()
             return {"generation_id": generation_id, "status": CanvasRunStatus.COMPLETED.value, "result_video_object_key": stored_video_asset.get("object_key")}
         except Exception as exc:
+            if self._has_successful_video_result(generation):
+                logger.warning("Canvas video generation error ignored because result already exists: %s", generation_id)
+                await canvas_service.update_generation(
+                    generation,
+                    item,
+                    CanvasRunStatus.COMPLETED.value,
+                    error_message=None,
+                )
+                await self.commit()
+                return {
+                    "generation_id": generation_id,
+                    "status": CanvasRunStatus.COMPLETED.value,
+                    "result_video_object_key": (generation.result_payload_json or {}).get("result_video_object_key"),
+                }
             await canvas_service.update_generation(
                 generation,
                 item,
@@ -925,11 +997,12 @@ class CanvasGenerationService(BaseService):
         self._ensure_item_type_matches(item, CanvasGenerationType.VIDEO.value)
 
         request = generation.request_payload_json or {}
-        provider_task_id = str(
-            (generation.result_payload_json or {}).get("provider_task_id")
-            or (generation.result_payload_json or {}).get("task_id")
-            or ""
-        ).strip()
+        result_payload = generation.result_payload_json or {}
+        provider_task_id = str(result_payload.get("provider_task_id") or "").strip()
+        if not provider_task_id:
+            local_task_id = str(result_payload.get("task_id") or "").strip()
+            if local_task_id and not is_likely_celery_task_id(local_task_id, generation_id):
+                provider_task_id = local_task_id
 
         result_video_object_key = str((generation.result_payload_json or {}).get("result_video_object_key") or "").strip()
         if generation.status == CanvasRunStatus.COMPLETED.value and result_video_object_key:
@@ -1628,9 +1701,6 @@ class CanvasGenerationService(BaseService):
         if not isinstance(payload, dict):
             return {}
         resolved = dict(payload)
-        storage_client = get_storage_client()
-        if inspect.isawaitable(storage_client):
-            storage_client = await storage_client
         field_pairs = (
             ("result_image_object_key", "result_image_url"),
             ("reference_image_object_key", "reference_image_url"),
@@ -1639,7 +1709,7 @@ class CanvasGenerationService(BaseService):
         for object_key_field, url_field in field_pairs:
             object_key = str(resolved.get(object_key_field) or "").strip()
             if object_key:
-                resolved[url_field] = storage_client.get_presigned_url(object_key)
+                resolved[url_field] = media_url_for_object_key(object_key)
         return resolved
 
     async def _resolve_image_result(self, response: Any, user_id: str) -> Dict[str, Any]:
@@ -1686,7 +1756,7 @@ class CanvasGenerationService(BaseService):
         )
         return {"object_key": storage["object_key"], "url": storage["url"]}
 
-    async def _resolve_video_reference_images(self, references: List[str]) -> List[str]:
+    async def _resolve_video_reference_images(self, references: List[str], *, prefer_public_urls: bool = False) -> List[str]:
         resolved: List[str] = []
         for reference in references or []:
             normalized = str(reference or "").strip()
@@ -1696,6 +1766,11 @@ class CanvasGenerationService(BaseService):
                 resolved.append(normalized)
                 continue
             if normalized.startswith("uploads/"):
+                if prefer_public_urls:
+                    public_url = absolute_public_media_url_for_object_key(normalized)
+                    if public_url:
+                        resolved.append(public_url)
+                        continue
                 storage_client = await get_storage_client()
                 image_bytes = await storage_client.download_file(normalized)
                 resolved.append(self._build_image_data_url(image_bytes))

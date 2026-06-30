@@ -26,3 +26,37 @@ class CanvasAssistantTurnResponse(BaseModel):
     message: str = ""
     events: list[dict[str, Any]] = Field(default_factory=list)
     pending_interrupt: dict[str, Any] | None = None
+
+
+class CanvasAssistantSuggestRequest(BaseModel):
+    canvas_id: str = Field(..., description="当前画布文档 id")
+    selected_item_id: str | None = Field(default=None, description="当前选中节点 id")
+    action: Literal["optimize_prompt", "image_to_video_prompt", "storyboard"] = Field(..., description="助手动作")
+    user_input: str | None = Field(default=None, description="用户额外输入")
+    api_key_id: str | None = Field(default=None, description="文本模型 API key id")
+    chat_model_id: str | None = Field(default=None, description="文本模型 id")
+
+
+class CanvasAssistantSuggestResponse(BaseModel):
+    action: str
+    text: str
+    suggested_title: str
+    target: str = "new_text_node"
+    selected_item: dict[str, Any] | None = None
+    canvas_summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class CanvasAssistantApplyRequest(BaseModel):
+    canvas_id: str = Field(..., description="当前画布文档 id")
+    selected_item_id: str | None = Field(default=None, description="当前选中节点 id")
+    mode: Literal["create_text_node", "update_selected_text_node"] = Field(..., description="写回模式")
+    title: str | None = Field(default=None, description="节点标题")
+    content: str = Field(..., min_length=1, description="写回文本")
+    relation_source_item_id: str | None = Field(default=None, description="可选来源节点 id")
+    position_x: float | None = None
+    position_y: float | None = None
+
+
+class CanvasAssistantApplyResponse(BaseModel):
+    item: dict[str, Any]
+    connection: dict[str, Any] | None = None

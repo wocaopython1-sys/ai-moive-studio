@@ -19,6 +19,17 @@
             :streaming="busy && item.type === 'assistant_message'"
             :live="busy && item.type === 'assistant_message' && item.message?.id === lastAssistantMessageId"
           />
+          <div
+            v-if="item.type === 'assistant_message' && item.message?.id === lastAssistantMessageId && canWriteBack && !busy"
+            class="assistant-timeline__writeback"
+          >
+            <el-button size="small" type="primary" @click="emit('write-to-selected')">
+              写入当前节点
+            </el-button>
+            <el-button size="small" @click="emit('create-text-node')">
+              新建文本节点
+            </el-button>
+          </div>
           <CanvasAssistantMessageItem
             v-else-if="item.type === 'error_notice'"
             :message="{ role: 'assistant', content: item.message }"
@@ -56,10 +67,17 @@
     // items: 时间线派生后的统一渲染项。
     items: { type: Array, default: () => [] },
     // busy: 当前是否正在流式处理或提交确认。
-    busy: { type: Boolean, default: false }
+    busy: { type: Boolean, default: false },
+    canWriteBack: { type: Boolean, default: false }
   })
 
-  const emit = defineEmits(['approve', 'reject', 'update:selected-model-id'])
+  const emit = defineEmits([
+    'approve',
+    'create-text-node',
+    'reject',
+    'update:selected-model-id',
+    'write-to-selected'
+  ])
   const scrollRef = ref(null)
   const conversationItems = computed(() => {
     const list = (Array.isArray(props.items) ? props.items : []).filter((item) => item?.type !== 'tool_summary')
@@ -164,6 +182,12 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+  }
+  .assistant-timeline__writeback {
+    display: flex;
+    justify-content: flex-start;
+    gap: 8px;
+    margin-top: -6px;
   }
   .assistant-timeline__activity {
     padding-top: 4px;

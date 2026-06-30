@@ -13,6 +13,7 @@ from src.core.logging import get_logger
 from src.models.user import User
 from src.services.project import ProjectService
 from src.utils.file_handlers import FileHandler, FileProcessingError
+from src.utils.media_urls import media_url_for_object_key
 from src.utils.storage import get_storage_client
 from src.api.schemas.file import (
     FileUploadResult,
@@ -28,6 +29,25 @@ from src.api.schemas.file import (
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+def _media_type_from_object_key(object_key: str) -> Optional[str]:
+    suffix = str(object_key or "").split("?")[0].rsplit(".", 1)[-1].lower()
+    if suffix in {"png", "jpg", "jpeg", "webp", "gif", "bmp"}:
+        return "image"
+    if suffix in {"mp4", "webm", "mov"}:
+        return "video"
+    return None
+
+
+def _mime_type_from_object_key(object_key: str, fallback: Optional[str] = None) -> str:
+    suffix = str(object_key or "").split("?")[0].rsplit(".", 1)[-1].lower()
+    mime_map = {
+        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "webp": "image/webp", "gif": "image/gif", "bmp": "image/bmp",
+        "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
+    }
+    return mime_map.get(suffix) or fallback or "application/octet-stream"
 
 
 @router.post("/upload", response_model=FileUploadResult)
@@ -288,13 +308,23 @@ async def list_user_files(
     # 清理文件信息
     cleaned_files = []
     for file_info in paginated_files:
+        object_key = file_info['object_key']
+        media_type = _media_type_from_object_key(object_key)
+        preview_url = media_url_for_object_key(object_key, "preview") if media_type else file_info.get('url')
+        download_url = media_url_for_object_key(object_key, "download") if media_type else file_info.get('url')
+        stream_url = media_url_for_object_key(object_key, "stream") if media_type == "video" else None
         cleaned_files.append({
-            "object_key": file_info['object_key'],
-            "filename": file_info['object_key'].split('/')[-1],
+            "object_key": object_key,
+            "filename": object_key.split('/')[-1],
             "size": file_info.get('size'),
             "size_mb": round(file_info.get('size', 0) / (1024 * 1024), 2),
             "last_modified": file_info.get('last_modified'),
             "url": file_info.get('url'),
+            "media_type": media_type,
+            "mime_type": _mime_type_from_object_key(object_key, file_info.get('content_type')),
+            "preview_url": preview_url,
+            "download_url": download_url,
+            "stream_url": stream_url,
             "is_orphaned": True  # 需要进一步检查是否关联到项目
         })
 

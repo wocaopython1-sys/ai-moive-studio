@@ -97,7 +97,8 @@ const props = defineProps({
   connections: { type: Array, default: () => [] },
   selectedItemIds: { type: Array, default: () => [] },
   selectedConnectionIds: { type: Array, default: () => [] },
-  editingItemId: { type: String, default: '' }
+  editingItemId: { type: String, default: '' },
+  viewportCommand: { type: Object, default: null }
 })
 
 const emit = defineEmits([
@@ -248,6 +249,25 @@ const emitViewportChange = () => {
     height: stageSize.value.height
   })
 }
+
+watch(
+  () => props.viewportCommand,
+  (command) => {
+    if (!command) return
+    stageScale.value = Math.min(2, Math.max(0.5, Number(command.scale || 1)))
+    stagePosition.value = {
+      x: Number(command.x || 0),
+      y: Number(command.y || 0)
+    }
+    stageRef.value?.getNode?.()?.position(stagePosition.value)
+    stageRef.value?.getNode?.()?.scale({
+      x: stageScale.value,
+      y: stageScale.value
+    })
+    stageRef.value?.getNode?.()?.batchDraw?.()
+    emitViewportChange()
+  }
+)
 
 const updateStageSize = () => {
   if (!containerRef.value) {

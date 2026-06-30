@@ -49,6 +49,15 @@
         <button class="toolbar-btn" type="button" :disabled="creatingItem" @click="$emit('create-item', 'video')">
           <el-icon><VideoPlay /></el-icon>
         </button>
+        <button
+          class="toolbar-btn"
+          type="button"
+          :disabled="creatingItem"
+          data-testid="open-assets"
+          @click="$emit('open-assets')"
+        >
+          <el-icon><FolderOpened /></el-icon>
+        </button>
       </div>
     </aside>
 
@@ -94,7 +103,7 @@
 </template>
 
 <script setup>
-import { Document, MagicStick, Operation, Picture, Plus, VideoPlay } from '@element-plus/icons-vue'
+import { Document, FolderOpened, MagicStick, Operation, Picture, Plus, VideoPlay } from '@element-plus/icons-vue'
 
 const props = defineProps({
   title: { type: String, default: '' },
@@ -106,7 +115,7 @@ const props = defineProps({
   showLauncher: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['back', 'create-item'])
+const emit = defineEmits(['back', 'create-item', 'open-assets'])
 
 const handleMenuCommand = (command) => {
   emit('create-item', command)
@@ -188,7 +197,7 @@ const handleMenuCommand = (command) => {
   left: 20px;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 18;
+  z-index: 1200;
   display: flex;
   flex-direction: column;
   align-items: center;

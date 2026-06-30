@@ -72,8 +72,13 @@ class CustomProvider(BaseLLMProvider):
 
         # 用 semaphore 限制并发
         async with self.semaphore:
+            # OpenAI-compatible image endpoints such as gpt-image-* do not accept
+            # AICON's canvas-level aspect_ratio/image_size/reference_images fields.
+            openai_kwargs = dict(kwargs)
+            for unsupported_key in ("aspect_ratio", "image_size", "reference_images"):
+                openai_kwargs.pop(unsupported_key, None)
             return await self.client.images.generate(
-                model=model or "Kwai-Kolors/Kolors", prompt=prompt, **kwargs
+                model=model or "Kwai-Kolors/Kolors", prompt=prompt, **openai_kwargs
             )
 
     @log_provider_call("generate_audio")
@@ -237,4 +242,3 @@ class CustomProvider(BaseLLMProvider):
                         
                     result = await resp.text()
                     return json.loads(result)
-

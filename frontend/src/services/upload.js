@@ -4,6 +4,10 @@ import { get, post, del, upload } from './api'
  * 文件管理服务 - 职责分离后的纯文件操作
  */
 export const fileService = {
+  async listFiles(params = {}) {
+    return await get('/files/list', { params })
+  },
+
   /**
    * 纯文件上传，返回文件ID
    * @param {FormData} formData - 包含文件的表单数据

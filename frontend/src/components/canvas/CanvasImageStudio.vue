@@ -184,6 +184,27 @@
             历史
           </button>
           <button
+            v-if="draft.resultImageUrl"
+            class="history-action-btn"
+            @click="$emit('copy-url')"
+          >
+            复制
+          </button>
+          <button
+            v-if="draft.resultImageUrl"
+            class="history-action-btn"
+            @click="$emit('download')"
+          >
+            下载
+          </button>
+          <button
+            v-if="draft.resultImageUrl"
+            class="history-action-btn"
+            @click="$emit('create-video-from-image')"
+          >
+            生成视频
+          </button>
+          <button
             class="generate-action-btn"
             :disabled="!canSubmitPrompt || generating || uploading"
             @click="handleGenerate"
@@ -250,6 +271,9 @@
     'generate',
     'handle-drag',
     'history',
+    'copy-url',
+    'download',
+    'create-video-from-image',
     'update:api-key-id',
     'update:aspect-ratio',
     'update:model-id',

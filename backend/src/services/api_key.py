@@ -336,12 +336,16 @@ class APIKeyService(BaseService):
         
         # Custom provider - 返回预定义模型列表
         elif provider == 'custom':
+            base_url = (api_key.base_url or '').lower()
             if model_type == "image":
-                return ['gemini-3.1-flash-image-preview','gemini-3-pro-image-preview']
+                if 'bigmodel.cn' in base_url:
+                    return ['glm-image', 'cogview-4-250304']
+                return ['gpt-image-2', 'gpt-image-1.5', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview']
             elif model_type == "audio":
                 return ['gpt-4o-mini-tts', 'tts-1']
             elif model_type == "video":
                 return [
+                    'cogvideox-3',
                     'veo3.1',
                     'veo3.1-components',
                     'veo3.1-fast',
@@ -349,7 +353,9 @@ class APIKeyService(BaseService):
                     'veo3.1-components-4k'
                 ]
             else:  # text
-                return ['gemini-3.1-flash-lite-preview','gemini-3.1-pro-preview']
+                if 'bigmodel.cn' in base_url:
+                    return ['glm-5.2', 'glm-4.6', 'glm-4.5', 'glm-4-plus']
+                return ['gpt-5.5', 'gpt-5.3-codex', 'gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview']
         
         # Other provider defaults
         elif provider == 'openai':

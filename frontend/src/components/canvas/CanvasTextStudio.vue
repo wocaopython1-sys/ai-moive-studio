@@ -99,6 +99,12 @@
           </el-select>
         </div>
         <div class="toolbar-right">
+          <button class="history-action-btn" :disabled="generating" @click="$emit('create-image-from-text')">
+            图片
+          </button>
+          <button class="history-action-btn" :disabled="generating" @click="$emit('create-video-from-text')">
+            视频
+          </button>
           <button class="generate-action-btn" :disabled="!canSubmitPrompt || generating" @click="handleSubmitGeneration">
             <el-icon v-if="generating" class="is-loading"><Loading /></el-icon>
             <el-icon v-else><Top /></el-icon>
@@ -132,7 +138,7 @@ const props = defineProps({
   modelOptionsLoading: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['delete', 'drag-node', 'focus-item', 'handle-drag', 'submit-generation', 'update:api-key-id', 'update:model-id', 'update:text', 'update:title', 'update:tokens', 'commit'])
+const emit = defineEmits(['delete', 'drag-node', 'focus-item', 'handle-drag', 'submit-generation', 'create-image-from-text', 'create-video-from-text', 'update:api-key-id', 'update:model-id', 'update:text', 'update:title', 'update:tokens', 'commit'])
 
 const promptEditorRef = ref(null)
 const rootRef = ref(null)
@@ -530,7 +536,8 @@ button {
   width: 170px;
 }
 
-.generate-action-btn {
+.generate-action-btn,
+.history-action-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -538,9 +545,19 @@ button {
   height: 32px;
   padding: 0 14px;
   border-radius: 10px;
+}
+
+.generate-action-btn {
   background: linear-gradient(180deg, #4b78ff, #355ce0);
   color: #fff;
   font-weight: 700;
+}
+
+.history-action-btn {
+  background: rgba(255, 255, 255, 0.88);
+  color: #355ce0;
+  border: 1px solid rgba(75, 120, 255, 0.18);
+  font-size: 12px;
 }
 
 .panel-delete-btn {

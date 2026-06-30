@@ -246,6 +246,18 @@ export function useCanvasEditor() {
       !Array.isArray(options.generation_config)
         ? options.generation_config
         : {}
+    const initialContent =
+      options?.content &&
+      typeof options.content === 'object' &&
+      !Array.isArray(options.content)
+        ? options.content
+        : {}
+    const initialLastOutput =
+      options?.last_output &&
+      typeof options.last_output === 'object' &&
+      !Array.isArray(options.last_output)
+        ? options.last_output
+        : {}
     const count = items.value.filter(
       (item) => item.item_type === itemType
     ).length
@@ -253,24 +265,28 @@ export function useCanvasEditor() {
     const payload = {
       item_type: itemType,
       title:
-        itemType === 'text'
+        String(options?.title || '').trim() ||
+        (itemType === 'text'
           ? `文本节点 ${count + 1}`
           : itemType === 'image'
             ? `图片节点 ${count + 1}`
-            : `视频节点 ${count + 1}`,
+            : `视频节点 ${count + 1}`),
       position_x: Number(position.position_x ?? 120 + count * 24),
       position_y: Number(position.position_y ?? 120 + count * 24),
-      width: size.width,
-      height: size.height,
+      width: Number(options?.width ?? size.width),
+      height: Number(options?.height ?? size.height),
       z_index: maxZIndex.value + 1,
-      content: DEFAULT_CONTENT[itemType](),
+      content: {
+        ...DEFAULT_CONTENT[itemType](),
+        ...initialContent
+      },
       generation_config: {
         ...(itemType === 'video' ? { aspectRatio: DEFAULT_ASPECT_RATIO } : {}),
         ...initialGenerationConfig
       },
-      last_run_status: 'idle',
-      last_run_error: null,
-      last_output: {}
+      last_run_status: options?.last_run_status || 'idle',
+      last_run_error: options?.last_run_error || null,
+      last_output: initialLastOutput
     }
     const created = normalizeItem(
       await canvasService.createItem(currentDocumentId, payload)

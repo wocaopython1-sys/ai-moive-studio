@@ -1,0 +1,154 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: aicon-demo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aicg_platform
+      POSTGRES_USER: aicg_user
+      POSTGRES_PASSWORD: aicg_password_demo
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "127.0.0.1:19432:5432"
+    volumes:
+      - postgres_demo_data:/var/lib/postgresql/data
+    networks:
+      - aicon-demo-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aicg_user -d aicg_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: aicon-demo-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass redis_password_demo
+    ports:
+      - "127.0.0.1:19379:6379"
+    volumes:
+      - redis_demo_data:/data
+    networks:
+      - aicon-demo-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a redis_password_demo ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    image: minio/minio:latest
+    container_name: aicon-demo-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123demo
+      MINIO_BROWSER_REDIRECT_URL: http://127.0.0.1:19191
+    ports:
+      - "127.0.0.1:19190:9000"
+      - "127.0.0.1:19191:9001"
+    volumes:
+      - minio_demo_data:/data
+    networks:
+      - aicon-demo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: ./backend
+    image: aicon-demo-backend:local
+    container_name: aicon-demo-backend
+    restart: unless-stopped
+    env_file:
+      - ./.env.demo
+    ports:
+      - "127.0.0.1:19181:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - aicon-demo-network
+    volumes:
+      - ./backend/logs:/app/logs
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn src.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      interval: 20s
+      timeout: 10s
+      retries: 12
+
+  celery-worker:
+    image: aicon-demo-backend:local
+    container_name: aicon-demo-celery-worker
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    env_file:
+      - ./.env.demo
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    networks:
+      - aicon-demo-network
+    volumes:
+      - ./backend/logs:/app/logs
+    command: celery -A src.tasks.app:celery_app worker --loglevel=info --concurrency=2
+
+  celery-beat:
+    image: aicon-demo-backend:local
+    container_name: aicon-demo-celery-beat
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    env_file:
+      - ./.env.demo
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    networks:
+      - aicon-demo-network
+    volumes:
+      - ./backend/logs:/app/logs
+    command: celery -A src.tasks.app:celery_app beat --loglevel=info
+
+  frontend:
+    build:
+      context: ./frontend
+    image: aicon-demo-frontend:local
+    container_name: aicon-demo-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:19180:80"
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - aicon-demo-network
+
+networks:
+  aicon-demo-network:
+    driver: bridge
+
+volumes:
+  postgres_demo_data:
+    driver: local
+  redis_demo_data:
+    driver: local
+  minio_demo_data:
+    driver: local
