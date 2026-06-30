@@ -78,6 +78,13 @@ class FileInfo(BaseModel):
     preview_url: Optional[str] = Field(None, description="预览URL")
     download_url: Optional[str] = Field(None, description="下载URL")
     stream_url: Optional[str] = Field(None, description="流式播放URL")
+    id: Optional[str] = Field(None, description="素材ID")
+    title: Optional[str] = Field(None, description="素材标题")
+    source: Optional[str] = Field(None, description="来源：upload/generated/canvas/unknown")
+    canvas_id: Optional[str] = Field(None, description="来源Canvas ID")
+    canvas_item_id: Optional[str] = Field(None, description="来源Canvas节点ID")
+    text: Optional[str] = Field(None, description="文本/Prompt内容")
+    summary: Optional[str] = Field(None, description="文本摘要")
 
     model_config = {
         "json_schema_extra": {
@@ -102,6 +109,7 @@ class FileResponse(FileInfo):
 class FileListResponse(PaginatedResponse):
     """文件列表响应模型"""
     files: List[FileInfo] = Field(..., description="文件列表")
+    items: List[FileInfo] = Field(default_factory=list, description="素材列表别名")
     orphaned_count: int = Field(0, description="孤立文件数量")
 
     model_config = {

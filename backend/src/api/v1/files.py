@@ -2,14 +2,17 @@
 文件管理API - 重构后使用schemas模块中的Pydantic模型
 """
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies import get_current_user_required
 from src.core.database import get_db
 from src.core.logging import get_logger
+from src.models.canvas import CanvasDocument, CanvasItem, CanvasItemType, CanvasRunStatus
 from src.models.user import User
 from src.services.project import ProjectService
 from src.utils.file_handlers import FileHandler, FileProcessingError
@@ -48,6 +51,176 @@ def _mime_type_from_object_key(object_key: str, fallback: Optional[str] = None) 
         "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
     }
     return mime_map.get(suffix) or fallback or "application/octet-stream"
+
+
+def _source_from_object_key(object_key: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+    metadata = metadata or {}
+    metadata_source = str(metadata.get("source") or metadata.get("x-amz-meta-source") or "").strip().lower()
+    if metadata_source:
+        return metadata_source
+    filename = str(object_key or "").split("/")[-1].lower()
+    if any(token in filename for token in ("generated", "phase1a", "assistant")):
+        return "generated"
+    return "upload"
+
+
+def _normalize_file_info(file_info: Dict[str, Any]) -> Dict[str, Any]:
+    object_key = file_info["object_key"]
+    media_type = _media_type_from_object_key(object_key)
+    preview_url = media_url_for_object_key(object_key, "preview") if media_type else file_info.get("url")
+    download_url = media_url_for_object_key(object_key, "download") if media_type else file_info.get("url")
+    stream_url = media_url_for_object_key(object_key, "stream") if media_type == "video" else None
+    filename = object_key.split("/")[-1]
+    return {
+        "id": object_key,
+        "object_key": object_key,
+        "filename": filename,
+        "title": filename,
+        "size": file_info.get("size") or 0,
+        "size_mb": round((file_info.get("size") or 0) / (1024 * 1024), 2),
+        "last_modified": file_info.get("last_modified"),
+        "url": file_info.get("url"),
+        "media_type": media_type,
+        "mime_type": _mime_type_from_object_key(object_key, file_info.get("content_type")),
+        "preview_url": preview_url,
+        "download_url": download_url,
+        "stream_url": stream_url,
+        "source": _source_from_object_key(object_key, file_info.get("metadata")),
+        "is_orphaned": True,
+    }
+
+
+def _matches_library_filters(entry: Dict[str, Any], *, q: Optional[str], media_type: Optional[str], source: Optional[str]) -> bool:
+    normalized_type = str(media_type or "all").strip().lower()
+    normalized_source = str(source or "all").strip().lower()
+    query = str(q or "").strip().lower()
+
+    if normalized_type and normalized_type != "all":
+        if normalized_type in {"prompt", "text"}:
+            if entry.get("media_type") != "text":
+                return False
+        elif entry.get("media_type") != normalized_type:
+            return False
+
+    if normalized_source and normalized_source != "all":
+        if entry.get("source") != normalized_source:
+            return False
+
+    if query:
+        haystack = " ".join(
+            str(entry.get(field) or "")
+            for field in ("filename", "title", "object_key", "text", "summary", "canvas_id", "canvas_item_id")
+        ).lower()
+        if query not in haystack:
+            return False
+
+    return True
+
+
+def _paginate_entries(entries: List[Dict[str, Any]], *, page: int, size: int) -> tuple[List[Dict[str, Any]], int, int]:
+    total = len(entries)
+    start_index = (page - 1) * size
+    end_index = start_index + size
+    total_pages = (total + size - 1) // size if total else 0
+    return entries[start_index:end_index], total, total_pages
+
+
+def _stringify_datetime(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    return str(value)
+
+
+def _extract_canvas_text(content: Dict[str, Any], last_output: Dict[str, Any]) -> str:
+    content = content or {}
+    last_output = last_output or {}
+    prompt_tokens = content.get("promptTokens")
+    token_text = ""
+    if isinstance(prompt_tokens, list):
+        token_text = "".join(
+            str(token.get("text") or "")
+            for token in prompt_tokens
+            if isinstance(token, dict) and str(token.get("type") or "text") == "text"
+        ).strip()
+    return str(
+        content.get("text")
+        or content.get("draft_text")
+        or content.get("promptPlainText")
+        or content.get("prompt")
+        or last_output.get("text")
+        or token_text
+        or ""
+    ).strip()
+
+
+def _canvas_text_item_to_file_info(item: CanvasItem, document: CanvasDocument) -> Optional[Dict[str, Any]]:
+    text = _extract_canvas_text(item.content_json or {}, item.last_output_json or {})
+    saved_to_library = bool((item.content_json or {}).get("saved_to_library"))
+    if not text and not saved_to_library:
+        return None
+
+    title = str(
+        item.title
+        or (item.content_json or {}).get("library_title")
+        or (text[:24] if text else "Canvas 文本素材")
+    ).strip()
+    summary = text[:180] + ("..." if len(text) > 180 else "")
+    object_key = f"canvas-item:{item.id}"
+    updated_at = getattr(item, "updated_at", None) or getattr(document, "updated_at", None)
+    return {
+        "id": object_key,
+        "object_key": object_key,
+        "filename": title,
+        "title": title,
+        "size": len(text.encode("utf-8")),
+        "size_mb": round(len(text.encode("utf-8")) / (1024 * 1024), 4),
+        "last_modified": _stringify_datetime(updated_at),
+        "url": None,
+        "is_orphaned": False,
+        "media_type": "text",
+        "mime_type": "text/plain",
+        "preview_url": None,
+        "download_url": None,
+        "stream_url": None,
+        "source": "canvas",
+        "canvas_id": str(document.id),
+        "canvas_item_id": str(item.id),
+        "text": text,
+        "summary": summary,
+    }
+
+
+async def _list_canvas_text_assets(
+        db: AsyncSession,
+        user_id: str,
+) -> List[Dict[str, Any]]:
+    stmt = (
+        select(CanvasItem, CanvasDocument)
+        .join(CanvasDocument, CanvasItem.document_id == CanvasDocument.id)
+        .where(
+            CanvasDocument.user_id == current_user_uuid(user_id),
+            CanvasItem.item_type == CanvasItemType.TEXT.value,
+        )
+        .order_by(desc(CanvasItem.updated_at))
+        .limit(200)
+    )
+    result = await db.execute(stmt)
+    entries = []
+    for item, document in result.all():
+        entry = _canvas_text_item_to_file_info(item, document)
+        if entry:
+            entries.append(entry)
+    return entries
+
+
+def current_user_uuid(user_id: str):
+    from src.models.canvas import ensure_canvas_uuid
+
+    return ensure_canvas_uuid(user_id)
 
 
 @router.post("/upload", response_model=FileUploadResult)
@@ -272,8 +445,13 @@ async def list_user_files(
         current_user: User = Depends(get_current_user_required),
         db: AsyncSession = Depends(get_db),
         prefix: Optional[str] = Query(None, description="文件前缀过滤"),
+        media_type: Optional[str] = Query("all", description="素材类型过滤：all/image/video/text"),
+        q: Optional[str] = Query(None, description="关键词搜索"),
+        source: Optional[str] = Query("all", description="来源过滤：all/upload/generated"),
         page: int = Query(1, ge=1, description="页码"),
-        size: int = Query(50, ge=1, le=200, description="每页大小")
+        size: int = Query(50, ge=1, le=200, description="每页大小"),
+        limit: Optional[int] = Query(None, ge=1, le=200, description="兼容素材库limit"),
+        offset: int = Query(0, ge=0, description="兼容素材库offset")
 ):
     """
     列出用户的文件
@@ -294,39 +472,30 @@ async def list_user_files(
     user_prefix = f"uploads/{current_user.id}/"
     search_prefix = user_prefix + (prefix or "")
 
-    # 获取文件列表
-    files = await storage_client.list_files(prefix=search_prefix, limit=size * page)
+    effective_size = limit or size
 
-    # 计算总数（简化处理）
-    total_files = len(files)
+    # 获取文件列表。MinIO list 没有总数接口，阶段 1C 仍采用轻量拉取后过滤。
+    files = await storage_client.list_files(prefix=search_prefix, limit=200)
+    all_files = [
+        _normalize_file_info(file_info)
+        for file_info in files
+    ]
+    filtered_files = [
+        file_info
+        for file_info in all_files
+        if _matches_library_filters(file_info, q=q, media_type=media_type, source=source)
+    ]
 
-    # 分页处理
-    start_index = (page - 1) * size
-    end_index = start_index + size
-    paginated_files = files[start_index:end_index]
-
-    # 清理文件信息
-    cleaned_files = []
-    for file_info in paginated_files:
-        object_key = file_info['object_key']
-        media_type = _media_type_from_object_key(object_key)
-        preview_url = media_url_for_object_key(object_key, "preview") if media_type else file_info.get('url')
-        download_url = media_url_for_object_key(object_key, "download") if media_type else file_info.get('url')
-        stream_url = media_url_for_object_key(object_key, "stream") if media_type == "video" else None
-        cleaned_files.append({
-            "object_key": object_key,
-            "filename": object_key.split('/')[-1],
-            "size": file_info.get('size'),
-            "size_mb": round(file_info.get('size', 0) / (1024 * 1024), 2),
-            "last_modified": file_info.get('last_modified'),
-            "url": file_info.get('url'),
-            "media_type": media_type,
-            "mime_type": _mime_type_from_object_key(object_key, file_info.get('content_type')),
-            "preview_url": preview_url,
-            "download_url": download_url,
-            "stream_url": stream_url,
-            "is_orphaned": True  # 需要进一步检查是否关联到项目
-        })
+    if limit is not None:
+        total_files = len(filtered_files)
+        start_index = offset
+        end_index = offset + effective_size
+        cleaned_files = filtered_files[start_index:end_index]
+        total_pages = (total_files + effective_size - 1) // effective_size if total_files else 0
+        page = (offset // effective_size) + 1
+        size = effective_size
+    else:
+        cleaned_files, total_files, total_pages = _paginate_entries(filtered_files, page=page, size=size)
 
     # 检查哪些文件是孤立的
     project_service = ProjectService(db)
@@ -345,16 +514,76 @@ async def list_user_files(
     for file_info in cleaned_files:
         file_info['is_orphaned'] = file_info['object_key'] not in project_object_keys
 
-    total_pages = (total_files + size - 1) // size
     orphaned_count = sum(1 for f in cleaned_files if f['is_orphaned'])
+    file_items = [FileInfo(**f) for f in cleaned_files]
 
     return FileListResponse(
-        files=[FileInfo(**f) for f in cleaned_files],
+        files=file_items,
+        items=file_items,
         total=total_files,
         page=page,
         size=size,
         total_pages=total_pages,
         orphaned_count=orphaned_count,
+    )
+
+
+@router.get("/library", response_model=FileListResponse)
+async def list_asset_library(
+        *,
+        current_user: User = Depends(get_current_user_required),
+        db: AsyncSession = Depends(get_db),
+        media_type: Optional[str] = Query("all", description="素材类型：all/image/video/text/prompt"),
+        q: Optional[str] = Query(None, description="关键词搜索"),
+        source: Optional[str] = Query("all", description="来源：all/upload/generated/canvas"),
+        page: int = Query(1, ge=1, description="页码"),
+        size: int = Query(48, ge=1, le=200, description="每页大小"),
+        limit: Optional[int] = Query(None, ge=1, le=200, description="limit/offset兼容"),
+        offset: int = Query(0, ge=0, description="limit/offset兼容")
+):
+    """
+    轻量素材库聚合接口。
+
+    阶段 1C 不新增资产表：图片/视频来自 MinIO 文件列表，文本/Prompt 来自 Canvas 文本节点。
+    """
+    storage_client = await get_storage_client()
+    user_prefix = f"uploads/{current_user.id}/"
+    effective_size = limit or size
+
+    storage_files = await storage_client.list_files(prefix=user_prefix, limit=200)
+    media_entries = [
+        _normalize_file_info(file_info)
+        for file_info in storage_files
+    ]
+    text_entries = await _list_canvas_text_assets(db, str(current_user.id))
+
+    all_entries = [
+        entry
+        for entry in [*media_entries, *text_entries]
+        if _matches_library_filters(entry, q=q, media_type=media_type, source=source)
+    ]
+    all_entries.sort(key=lambda entry: str(entry.get("last_modified") or ""), reverse=True)
+
+    if limit is not None:
+        total_files = len(all_entries)
+        start_index = offset
+        end_index = offset + effective_size
+        page_items = all_entries[start_index:end_index]
+        total_pages = (total_files + effective_size - 1) // effective_size if total_files else 0
+        page = (offset // effective_size) + 1
+        size = effective_size
+    else:
+        page_items, total_files, total_pages = _paginate_entries(all_entries, page=page, size=size)
+
+    file_items = [FileInfo(**entry) for entry in page_items]
+    return FileListResponse(
+        files=file_items,
+        items=file_items,
+        total=total_files,
+        page=page,
+        size=size,
+        total_pages=total_pages,
+        orphaned_count=0,
     )
 
 

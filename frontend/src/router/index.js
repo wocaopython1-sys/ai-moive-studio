@@ -19,6 +19,7 @@ const Settings = () => import('@/views/Settings.vue')
 const CanvasList = () => import('@/views/canvas/CanvasList.vue')
 const CanvasEditor = () => import('@/views/canvas/CanvasEditor.vue')
 const TasksHistory = () => import('@/views/TasksHistory.vue')
+const AssetsLibrary = () => import('@/views/AssetsLibrary.vue')
 
 const routes = [
   {
@@ -153,6 +154,19 @@ const routes = [
         path: '',
         name: 'TasksHistoryPage',
         component: TasksHistory
+      }
+    ]
+  },
+  {
+    path: '/library',
+    name: 'AssetsLibrary',
+    component: MainLayout,
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        name: 'AssetsLibraryPage',
+        component: AssetsLibrary
       }
     ]
   },

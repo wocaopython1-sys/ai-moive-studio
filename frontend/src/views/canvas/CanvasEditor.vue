@@ -320,6 +320,14 @@
 
         <div class="canvas-relation-panel__actions">
           <button
+            class="canvas-relation-btn canvas-relation-btn--primary"
+            type="button"
+            data-testid="save-selected-to-library"
+            @click="saveSelectedToLibrary"
+          >
+            保存到素材库
+          </button>
+          <button
             class="canvas-relation-btn"
             type="button"
             data-testid="set-relation-source"
@@ -1240,6 +1248,64 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
 
   const copyAssetUrl = async (asset) => {
     await copyTextToClipboard(toAbsoluteUrl(asset?.preview_url), '素材 URL 已复制')
+  }
+
+  const extractSelectedTextForLibrary = (item) => {
+    if (!item) return ''
+    return String(
+      item.content?.text ||
+        item.content?.draft_text ||
+        item.content?.promptPlainText ||
+        item.content?.prompt ||
+        item.last_output?.text ||
+        ''
+    ).trim()
+  }
+
+  const saveSelectedToLibrary = async () => {
+    if (!selectedItem.value) {
+      ElMessage.warning('请先选择一个节点')
+      return
+    }
+    try {
+      syncSelectedStudioDraft()
+      const item = selectedItem.value
+      const text = item.item_type === 'text' ? extractSelectedTextForLibrary(item) : ''
+      if (item.item_type === 'text' && !text) {
+        ElMessage.warning('当前文本节点没有可保存内容')
+        return
+      }
+      const objectKey = resolveObjectKeyFromItem(item)
+      if (['image', 'video'].includes(item.item_type) && !objectKey) {
+        ElMessage.warning('当前媒体节点没有可保存的 object_key')
+        return
+      }
+
+      const patch = {
+        content: {
+          ...item.content,
+          saved_to_library: true,
+          library_title: item.title || (item.item_type === 'text' ? 'Prompt 素材' : '媒体素材'),
+          library_saved_at: new Date().toISOString()
+        }
+      }
+      if (item.item_type === 'text') {
+        patch.last_run_status = item.last_run_status || 'completed'
+        patch.last_output = { ...(item.last_output || {}), text }
+      }
+      updateItem(item.id, patch)
+      await save()
+      await loadAssetItems()
+      ElMessage.success(
+        item.item_type === 'text'
+          ? '文本/Prompt 已保存到素材库'
+          : '媒体已在素材库可见，并已标记保存'
+      )
+    } catch (error) {
+      ElMessage.error(
+        error?.response?.data?.detail || error?.message || '保存到素材库失败'
+      )
+    }
   }
 
   const getVisibleCanvasCenterPosition = (nodeType = 'image') => {

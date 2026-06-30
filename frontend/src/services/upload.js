@@ -8,6 +8,10 @@ export const fileService = {
     return await get('/files/list', { params })
   },
 
+  async listLibrary(params = {}) {
+    return await get('/files/library', { params })
+  },
+
   /**
    * 纯文件上传，返回文件ID
    * @param {FormData} formData - 包含文件的表单数据
