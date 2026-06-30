@@ -207,10 +207,13 @@
           <button
             class="generate-action-btn"
             :disabled="!canSubmitPrompt || generating || uploading"
+            :title="generating ? '正在生成图片' : '生成图片'"
+            :aria-label="generating ? '正在生成图片' : '生成图片'"
             @click="handleGenerate"
           >
             <el-icon v-if="generating" class="is-loading"><Loading /></el-icon>
             <el-icon v-else><Top /></el-icon>
+            <span>{{ generating ? '生成中' : '生成图片' }}</span>
           </button>
         </div>
       </div>
@@ -617,6 +620,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 6px;
     min-width: 0;
     height: 34px;
     padding: 0 12px;
@@ -628,6 +632,7 @@
     background: linear-gradient(180deg, #4b78ff, #355ce0);
     color: #fff;
     font-weight: 700;
+    min-width: 96px;
   }
 
   .history-action-btn {

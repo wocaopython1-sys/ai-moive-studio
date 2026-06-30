@@ -174,10 +174,13 @@
           <button
             class="generate-action-btn"
             :disabled="!canSubmitPrompt || generating || uploading"
+            :title="generating ? '正在生成视频' : '生成视频'"
+            :aria-label="generating ? '正在生成视频' : '生成视频'"
             @click="handleGenerate"
           >
             <el-icon v-if="generating" class="is-loading"><Loading /></el-icon>
             <el-icon v-else><Top /></el-icon>
+            <span>{{ generating ? '生成中' : '生成视频' }}</span>
           </button>
         </div>
       </div>
@@ -608,6 +611,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 6px;
     min-width: 64px;
     height: 34px;
     padding: 0 14px;
@@ -618,6 +622,7 @@
     background: linear-gradient(180deg, #4b78ff, #355ce0);
     color: #fff;
     font-weight: 700;
+    min-width: 96px;
   }
 
   .history-action-btn {

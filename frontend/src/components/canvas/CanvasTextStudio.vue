@@ -99,15 +99,34 @@
           </el-select>
         </div>
         <div class="toolbar-right">
-          <button class="history-action-btn" :disabled="generating" @click="$emit('create-image-from-text')">
-            图片
+          <button
+            class="history-action-btn"
+            :disabled="generating"
+            title="创建图片节点并关联当前文本"
+            aria-label="创建图片节点并关联当前文本"
+            @click="$emit('create-image-from-text')"
+          >
+            创建图片节点
           </button>
-          <button class="history-action-btn" :disabled="generating" @click="$emit('create-video-from-text')">
-            视频
+          <button
+            class="history-action-btn"
+            :disabled="generating"
+            title="创建视频节点并关联当前文本"
+            aria-label="创建视频节点并关联当前文本"
+            @click="$emit('create-video-from-text')"
+          >
+            创建视频节点
           </button>
-          <button class="generate-action-btn" :disabled="!canSubmitPrompt || generating" @click="handleSubmitGeneration">
+          <button
+            class="generate-action-btn"
+            :disabled="!canSubmitPrompt || generating"
+            :title="generating ? '正在生成文本' : '生成文本'"
+            :aria-label="generating ? '正在生成文本' : '生成文本'"
+            @click="handleSubmitGeneration"
+          >
             <el-icon v-if="generating" class="is-loading"><Loading /></el-icon>
             <el-icon v-else><Top /></el-icon>
+            <span>{{ generating ? '生成中' : '生成文本' }}</span>
           </button>
         </div>
       </div>
@@ -541,10 +560,12 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 60px;
+  gap: 6px;
+  min-width: 88px;
   height: 32px;
   padding: 0 14px;
   border-radius: 10px;
+  white-space: nowrap;
 }
 
 .generate-action-btn {

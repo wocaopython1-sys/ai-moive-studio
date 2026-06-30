@@ -619,11 +619,17 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     const spaceBelow = shellRect
       ? shellRect.height - (screenTop + screenHeight) - 20
       : 0
+    const viewportSpaceBelow =
+      shellRect && typeof window !== 'undefined'
+        ? window.innerHeight - (shellRect.top + screenTop + screenHeight) - 20
+        : spaceBelow
+    const availableSpaceBelow = Math.min(spaceBelow, viewportSpaceBelow)
     const estimatedPanelHeight =
-      selectedItem.value.item_type === 'text' ? 220 : 268
+      selectedItem.value.item_type === 'text' ? 210 : 300
+    const minSpaceAbove = 180
     const shouldPlacePanelAbove = shellRect
-      ? spaceBelow < estimatedPanelHeight &&
-        screenTop > estimatedPanelHeight + 32
+      ? availableSpaceBelow < estimatedPanelHeight &&
+        screenTop > minSpaceAbove
       : false
     const headerNeedsInset = shellRect ? screenTop < 64 : false
     let panelOffsetX = 0
@@ -1074,7 +1080,7 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     })
     if (created?.id) {
       await connectItems(sourceItem.id, created.id)
-      await setSelectionWithDraftSync(created.id)
+      await focusCanvasItem(created)
     }
     return created
   }
@@ -2927,18 +2933,18 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
 
   .canvas-relation-panel {
     position: absolute;
-    left: 92px;
-    bottom: 22px;
-    z-index: 1180;
-    width: min(360px, calc(100% - 132px));
-    max-height: min(42vh, 340px);
+    left: 88px;
+    top: 84px;
+    z-index: 980;
+    width: min(300px, calc(100% - 132px));
+    max-height: min(36vh, 280px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
     border: 1px solid rgba(31, 49, 88, 0.14);
     border-radius: 14px;
     background: rgba(255, 255, 255, 0.97);
-    box-shadow: 0 14px 34px rgba(24, 42, 80, 0.16);
+    box-shadow: 0 12px 28px rgba(24, 42, 80, 0.12);
   }
 
   .canvas-relation-panel__header {

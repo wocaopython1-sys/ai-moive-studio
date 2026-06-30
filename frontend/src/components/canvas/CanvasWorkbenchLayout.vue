@@ -8,7 +8,13 @@
 
     <aside class="left-toolbar-panel">
       <el-dropdown trigger="click" placement="right-start" popper-class="canvas-create-dropdown" @command="handleMenuCommand">
-        <button class="toolbar-btn toolbar-btn--primary" type="button" :disabled="creatingItem">
+        <button
+          class="toolbar-btn toolbar-btn--primary"
+          type="button"
+          :disabled="creatingItem"
+          title="新建节点"
+          aria-label="新建节点"
+        >
           <el-icon><Plus /></el-icon>
         </button>
         <template #dropdown>
@@ -40,13 +46,34 @@
       </el-dropdown>
 
       <div class="toolbar-icons-group">
-        <button class="toolbar-btn" type="button" :disabled="creatingItem" @click="$emit('create-item', 'text')">
+        <button
+          class="toolbar-btn"
+          type="button"
+          :disabled="creatingItem"
+          title="新建文本节点"
+          aria-label="新建文本节点"
+          @click="$emit('create-item', 'text')"
+        >
           <el-icon><Document /></el-icon>
         </button>
-        <button class="toolbar-btn" type="button" :disabled="creatingItem" @click="$emit('create-item', 'image')">
+        <button
+          class="toolbar-btn"
+          type="button"
+          :disabled="creatingItem"
+          title="新建图片节点"
+          aria-label="新建图片节点"
+          @click="$emit('create-item', 'image')"
+        >
           <el-icon><Picture /></el-icon>
         </button>
-        <button class="toolbar-btn" type="button" :disabled="creatingItem" @click="$emit('create-item', 'video')">
+        <button
+          class="toolbar-btn"
+          type="button"
+          :disabled="creatingItem"
+          title="新建视频节点"
+          aria-label="新建视频节点"
+          @click="$emit('create-item', 'video')"
+        >
           <el-icon><VideoPlay /></el-icon>
         </button>
         <button
@@ -54,6 +81,8 @@
           type="button"
           :disabled="creatingItem"
           data-testid="open-assets"
+          title="打开最近素材"
+          aria-label="打开最近素材"
           @click="$emit('open-assets')"
         >
           <el-icon><FolderOpened /></el-icon>
@@ -63,6 +92,8 @@
           type="button"
           :disabled="creatingItem"
           data-testid="open-task-history"
+          title="打开任务中心"
+          aria-label="打开任务中心"
           @click="$emit('open-tasks')"
         >
           <el-icon><Document /></el-icon>
