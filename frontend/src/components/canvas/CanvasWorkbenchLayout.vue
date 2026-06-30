@@ -58,6 +58,15 @@
         >
           <el-icon><FolderOpened /></el-icon>
         </button>
+        <button
+          class="toolbar-btn"
+          type="button"
+          :disabled="creatingItem"
+          data-testid="open-task-history"
+          @click="$emit('open-tasks')"
+        >
+          <el-icon><Document /></el-icon>
+        </button>
       </div>
     </aside>
 
@@ -115,7 +124,7 @@ const props = defineProps({
   showLauncher: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['back', 'create-item', 'open-assets'])
+const emit = defineEmits(['back', 'create-item', 'open-assets', 'open-tasks'])
 
 const handleMenuCommand = (command) => {
   emit('create-item', command)

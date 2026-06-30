@@ -611,6 +611,252 @@ class CanvasService(BaseService):
         return sanitized
 
 
+class CanvasTaskHistoryService(BaseService):
+    def _normalize_status(self, status_value: Any) -> str:
+        status_text = str(status_value or "").strip().lower()
+        if status_text in {"pending", "queued"}:
+            return "pending"
+        if status_text in {"processing", "running", "started"}:
+            return "processing"
+        if status_text in {"completed", "success", "succeeded", "done"}:
+            return "completed"
+        if status_text in {"failed", "error", "cancelled", "canceled"}:
+            return "failed"
+        return status_text or "pending"
+
+    def _task_type_from_generation(self, generation: CanvasItemGeneration, item: CanvasItem) -> str:
+        generation_type = str(generation.generation_type or item.item_type or "").strip()
+        result_payload = generation.result_payload_json or {}
+        request_payload = generation.request_payload_json or {}
+        if generation_type == CanvasGenerationType.VIDEO.value and (
+            result_payload.get("provider_task_id")
+            or request_payload.get("options", {}).get("reference_image_urls")
+            or item.content_json.get("reference_image_urls")
+        ):
+            return "video"
+        return generation_type or item.item_type or "text"
+
+    def _media_payload(self, item_type: str, result_payload: Dict[str, Any], item_content: Dict[str, Any]) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "media_url": "",
+            "preview_url": "",
+            "download_url": "",
+            "stream_url": "",
+            "object_key": "",
+        }
+        if item_type == CanvasItemType.IMAGE.value:
+            object_key = str(
+                result_payload.get("result_image_object_key")
+                or item_content.get("result_image_object_key")
+                or item_content.get("reference_image_object_key")
+                or ""
+            ).strip()
+            if object_key:
+                payload.update(
+                    {
+                        "media_url": media_url_for_object_key(object_key, "preview"),
+                        "preview_url": media_url_for_object_key(object_key, "preview"),
+                        "download_url": media_url_for_object_key(object_key, "download"),
+                        "object_key": object_key,
+                    }
+                )
+        elif item_type == CanvasItemType.VIDEO.value:
+            object_key = str(
+                result_payload.get("result_video_object_key")
+                or item_content.get("result_video_object_key")
+                or ""
+            ).strip()
+            if object_key:
+                payload.update(
+                    {
+                        "media_url": media_url_for_object_key(object_key, "stream"),
+                        "preview_url": media_url_for_object_key(object_key, "preview"),
+                        "download_url": media_url_for_object_key(object_key, "download"),
+                        "stream_url": media_url_for_object_key(object_key, "stream"),
+                        "object_key": object_key,
+                    }
+                )
+        return payload
+
+    def _model_from_payloads(self, request_payload: Dict[str, Any], item: CanvasItem) -> str:
+        return str(
+            request_payload.get("model")
+            or (item.generation_config_json or {}).get("model")
+            or ""
+        ).strip()
+
+    def _provider_from_payloads(self, request_payload: Dict[str, Any], result_payload: Dict[str, Any]) -> str:
+        provider_response = result_payload.get("provider_response")
+        if isinstance(provider_response, dict):
+            provider = provider_response.get("provider") or provider_response.get("provider_name")
+            if provider:
+                return str(provider)
+        return str(request_payload.get("provider") or "").strip()
+
+    def _generation_to_history_item(self, generation: CanvasItemGeneration, item: CanvasItem, document: CanvasDocument) -> Dict[str, Any]:
+        request_payload = generation.request_payload_json or {}
+        result_payload = generation.result_payload_json or {}
+        content = item.content_json or {}
+        task_type = self._task_type_from_generation(generation, item)
+        media_payload = self._media_payload(item.item_type, result_payload, content)
+        source_item_id = ""
+        prompt_tokens = request_payload.get("prompt_tokens") or content.get("promptTokens") or []
+        if isinstance(prompt_tokens, list):
+            for token in prompt_tokens:
+                if isinstance(token, dict) and token.get("type") == "mention" and token.get("nodeId"):
+                    source_item_id = str(token.get("nodeId"))
+                    break
+        return {
+            "id": str(generation.id),
+            "type": task_type,
+            "status": self._normalize_status(generation.status),
+            "title": item.title or f"{task_type} 生成任务",
+            "canvas_id": str(document.id),
+            "canvas_title": document.title or "",
+            "canvas_item_id": str(item.id),
+            "source_item_id": source_item_id,
+            "media_url": media_payload["media_url"],
+            "preview_url": media_payload["preview_url"],
+            "download_url": media_payload["download_url"],
+            "stream_url": media_payload["stream_url"],
+            "object_key": media_payload["object_key"],
+            "error_message": generation.error_message or item.last_run_error or "",
+            "provider": self._provider_from_payloads(request_payload, result_payload),
+            "model": self._model_from_payloads(request_payload, item),
+            "created_at": generation.created_at.isoformat() if generation.created_at else "",
+            "updated_at": generation.updated_at.isoformat() if generation.updated_at else "",
+            "request_payload": request_payload,
+            "result_payload": result_payload,
+        }
+
+    def _assistant_item_to_history_item(self, item: CanvasItem, document: CanvasDocument) -> Dict[str, Any]:
+        content = item.content_json or {}
+        output = item.last_output_json or {}
+        return {
+            "id": f"item:{item.id}",
+            "type": "assistant" if content.get("assistant_writeback") else "text",
+            "status": self._normalize_status(item.last_run_status),
+            "title": item.title or "文本节点",
+            "canvas_id": str(document.id),
+            "canvas_title": document.title or "",
+            "canvas_item_id": str(item.id),
+            "source_item_id": "",
+            "media_url": "",
+            "preview_url": "",
+            "download_url": "",
+            "stream_url": "",
+            "object_key": "",
+            "error_message": item.last_run_error or "",
+            "provider": "",
+            "model": str((item.generation_config_json or {}).get("model") or "").strip(),
+            "created_at": item.created_at.isoformat() if item.created_at else "",
+            "updated_at": item.updated_at.isoformat() if item.updated_at else "",
+            "request_payload": {},
+            "result_payload": output or {"text": content.get("text") or content.get("prompt") or ""},
+        }
+
+    def _matches_filters(self, entry: Dict[str, Any], *, status: str | None, task_type: str | None) -> bool:
+        normalized_status = str(status or "").strip().lower()
+        normalized_type = str(task_type or "").strip().lower()
+        if normalized_status and entry.get("status") != normalized_status:
+            return False
+        if normalized_type:
+            if normalized_type == "image_to_video":
+                return entry.get("type") == "video" and bool((entry.get("result_payload") or {}).get("provider_task_id"))
+            return entry.get("type") == normalized_type
+        return True
+
+    async def list_history(
+        self,
+        user_id: str,
+        *,
+        canvas_id: str | None = None,
+        status: str | None = None,
+        task_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        normalized_user_id = ensure_canvas_uuid(user_id)
+        conditions = [CanvasDocument.user_id == normalized_user_id]
+        if canvas_id:
+            conditions.append(CanvasDocument.id == ensure_canvas_uuid(canvas_id))
+
+        generation_stmt = (
+            select(CanvasItemGeneration, CanvasItem, CanvasDocument)
+            .join(CanvasItem, CanvasItem.id == CanvasItemGeneration.item_id)
+            .join(CanvasDocument, CanvasDocument.id == CanvasItemGeneration.document_id)
+            .where(*conditions)
+            .order_by(desc(CanvasItemGeneration.created_at))
+        )
+        generation_rows = list((await self.execute(generation_stmt)).all())
+        entries = [
+            self._generation_to_history_item(generation, item, document)
+            for generation, item, document in generation_rows
+        ]
+
+        item_conditions = [
+            CanvasDocument.user_id == normalized_user_id,
+            CanvasItem.item_type == CanvasItemType.TEXT.value,
+            CanvasItem.last_run_status.in_([CanvasRunStatus.COMPLETED.value, CanvasRunStatus.FAILED.value]),
+        ]
+        if canvas_id:
+            item_conditions.append(CanvasDocument.id == ensure_canvas_uuid(canvas_id))
+        item_stmt = (
+            select(CanvasItem, CanvasDocument)
+            .join(CanvasDocument, CanvasDocument.id == CanvasItem.document_id)
+            .where(*item_conditions)
+            .order_by(desc(CanvasItem.created_at))
+        )
+        item_rows = list((await self.execute(item_stmt)).all())
+        generation_item_ids = {str(generation.item_id) for generation, _, _ in generation_rows}
+        for item, document in item_rows:
+            if str(item.id) in generation_item_ids:
+                continue
+            content = item.content_json or {}
+            if not content.get("assistant_writeback") and not (item.last_output_json or {}).get("text"):
+                continue
+            entries.append(self._assistant_item_to_history_item(item, document))
+
+        filtered = [
+            entry
+            for entry in entries
+            if self._matches_filters(entry, status=status, task_type=task_type)
+        ]
+        filtered.sort(key=lambda entry: entry.get("created_at") or "", reverse=True)
+        total = len(filtered)
+        return filtered[offset : offset + limit], total
+
+    async def get_history_detail(self, history_id: str, user_id: str) -> Dict[str, Any]:
+        if history_id.startswith("item:"):
+            item_id = history_id.split(":", 1)[1]
+            item_stmt = (
+                select(CanvasItem, CanvasDocument)
+                .join(CanvasDocument, CanvasDocument.id == CanvasItem.document_id)
+                .where(
+                    CanvasItem.id == ensure_canvas_uuid(item_id),
+                    CanvasDocument.user_id == ensure_canvas_uuid(user_id),
+                )
+            )
+            row = (await self.execute(item_stmt)).first()
+            if not row:
+                raise NotFoundError("任务历史不存在", resource_id=history_id, resource_type="task_history")
+            return self._assistant_item_to_history_item(row[0], row[1])
+
+        stmt = (
+            select(CanvasItemGeneration, CanvasItem, CanvasDocument)
+            .join(CanvasItem, CanvasItem.id == CanvasItemGeneration.item_id)
+            .join(CanvasDocument, CanvasDocument.id == CanvasItemGeneration.document_id)
+            .where(
+                CanvasItemGeneration.id == ensure_canvas_uuid(history_id),
+                CanvasDocument.user_id == ensure_canvas_uuid(user_id),
+            )
+        )
+        row = (await self.execute(stmt)).first()
+        if not row:
+            raise NotFoundError("任务历史不存在", resource_id=history_id, resource_type="task_history")
+        return self._generation_to_history_item(row[0], row[1], row[2])
+
+
 class CanvasGenerationService(BaseService):
     def _extract_object_key_from_media_url(self, media_url: Any) -> str:
         return extract_object_key_from_media_url(media_url)
@@ -1924,4 +2170,4 @@ class CanvasGenerationService(BaseService):
         return CanvasRunStatus.PROCESSING.value
 
 
-__all__ = ["CanvasGenerationService", "CanvasService"]
+__all__ = ["CanvasGenerationService", "CanvasService", "CanvasTaskHistoryService"]

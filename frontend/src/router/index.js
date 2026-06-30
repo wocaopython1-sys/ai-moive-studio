@@ -18,6 +18,7 @@ const APIKeys = () => import('@/views/APIKeys.vue')
 const Settings = () => import('@/views/Settings.vue')
 const CanvasList = () => import('@/views/canvas/CanvasList.vue')
 const CanvasEditor = () => import('@/views/canvas/CanvasEditor.vue')
+const TasksHistory = () => import('@/views/TasksHistory.vue')
 
 const routes = [
   {
@@ -139,6 +140,19 @@ const routes = [
         path: '',
         name: 'GenerationPage',
         component: () => import('@/views/VideoTasks.vue')
+      }
+    ]
+  },
+  {
+    path: '/tasks',
+    name: 'TasksHistory',
+    component: MainLayout,
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        name: 'TasksHistoryPage',
+        component: TasksHistory
       }
     ]
   },

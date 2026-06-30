@@ -126,6 +126,12 @@ const menuItems = [
     badge: null
   },
   {
+    title: '任务中心',
+    path: '/tasks',
+    icon: Document,
+    badge: null
+  },
+  {
     title: '视频生成',
     path: '/generation',
     icon: Document,

@@ -41,6 +41,7 @@
         @back="router.push('/canvas')"
         @create-item="createNode"
         @open-assets="openAssetDrawer"
+        @open-tasks="openCanvasTasks"
       >
         <CanvasAssistant
           :document-id="assistantDocumentId"
@@ -1302,6 +1303,24 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     }
   }
 
+  const focusRouteItemIfPresent = async () => {
+    const itemId = String(route.query.item_id || route.query.itemId || '').trim()
+    if (!itemId) return
+    const targetItem = items.value.find((item) => item.id === itemId)
+    if (!targetItem) {
+      return
+    }
+    await focusCanvasItem(targetItem)
+  }
+
+  const openCanvasTasks = () => {
+    const canvasId = String(document.value?.id || route.params.canvasId || '').trim()
+    router.push({
+      name: 'TasksHistoryPage',
+      query: canvasId ? { canvas_id: canvasId } : {}
+    })
+  }
+
   const addAssetToCanvas = async (asset) => {
     if (!asset?.object_key || !asset.media_type) return
     try {
@@ -2450,9 +2469,17 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
         historyTargetItemId.value = ''
         historySelectingId.value = ''
         await loadDocument(canvasId)
+        await focusRouteItemIfPresent()
       }
     },
     { immediate: true }
+  )
+
+  watch(
+    () => route.query.item_id || route.query.itemId,
+    async () => {
+      await focusRouteItemIfPresent()
+    }
   )
 
   onMounted(() => {

@@ -140,6 +140,10 @@ export const canvasService = {
 
   applyGeneration(itemId, generationId) {
     return post(`/canvas-items/${itemId}/generations/${generationId}/apply`)
+  },
+
+  listTaskHistory(params = {}) {
+    return get('/tasks/history', { params })
   }
 }
 
