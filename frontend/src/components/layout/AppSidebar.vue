@@ -108,7 +108,7 @@ const user = computed(() => authStore.user)
 // 菜单项配置
 const menuItems = [
   {
-    title: '控制台',
+    title: '创作大厅',
     path: '/dashboard',
     icon: House,
     badge: null

@@ -1,1017 +1,996 @@
 <template>
-  <div class="dashboard">
-    <!-- 页面欢迎信息 -->
-    <div class="page-header">
-      <h1 class="page-title">
-        <el-icon class="title-icon"><VideoPlay /></el-icon>
-        控制台
-      </h1>
-      <p class="page-description">欢迎回来，{{ authStore.user?.display_name || authStore.user?.username }}！开始您的创作之旅</p>
-    </div>
-
-    <!-- 快速操作入口 -->
-    <div class="quick-actions">
-      <div class="section-header">
-        <h2>快速操作</h2>
-        <p>选择您需要的功能，快速开始创作</p>
+  <section class="dashboard-page">
+    <header class="dashboard-header">
+      <div>
+        <p class="dashboard-eyebrow">创作大厅</p>
+        <h1>AICON AI 创作工作台</h1>
+        <p class="dashboard-subtitle">
+          图片、视频、Prompt、素材和任务都从这里开始。
+        </p>
       </div>
-      <div class="action-grid">
-        <div class="quick-action primary-action modern-gradient-1" @click="$router.push('/generation')">
-          <div class="action-icon-large">
-            <el-icon size="32"><VideoPlay /></el-icon>
-          </div>
-          <div class="action-content">
-            <h3>开始创作</h3>
-            <p>AI 文本转视频</p>
-          </div>
-          <div class="action-badge">推荐</div>
-          <div class="action-glow"></div>
-        </div>
-
-        <div class="quick-action modern-gradient-2" @click="$router.push('/projects')">
-          <div class="action-icon">
-            <el-icon size="24"><Folder /></el-icon>
-          </div>
-          <div class="action-content">
-            <h4>项目管理</h4>
-            <p>{{ projectCount }} 个项目</p>
-          </div>
-          <div class="action-arrow">
-            <el-icon size="16"><ArrowRight /></el-icon>
-          </div>
-        </div>
-
-        <div class="quick-action modern-gradient-3" @click="$router.push('/publish')">
-          <div class="action-icon">
-            <el-icon size="24"><Promotion /></el-icon>
-          </div>
-          <div class="action-content">
-            <h4>内容分发</h4>
-            <p>一键发布</p>
-          </div>
-          <div class="action-arrow">
-            <el-icon size="16"><ArrowRight /></el-icon>
-          </div>
-        </div>
-
-        <div class="quick-action modern-gradient-4" @click="$router.push('/settings')">
-          <div class="action-icon">
-            <el-icon size="24"><Setting /></el-icon>
-          </div>
-          <div class="action-content">
-            <h4>系统设置</h4>
-            <p>配置管理</p>
-          </div>
-          <div class="action-arrow">
-            <el-icon size="16"><ArrowRight /></el-icon>
-          </div>
-        </div>
+      <div class="dashboard-header__actions">
+        <input
+          ref="uploadInput"
+          class="hidden-upload"
+          type="file"
+          accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.mp4,.webm,.mov,image/*,video/mp4,video/webm,video/quicktime"
+          @change="handleUploadChange"
+        />
+        <el-button :loading="refreshing" @click="loadDashboardData">
+          <el-icon><Refresh /></el-icon>
+          刷新
+        </el-button>
+        <el-button :loading="creating" type="primary" @click="createCanvas('blank')">
+          <el-icon><Plus /></el-icon>
+          新建 Canvas
+        </el-button>
       </div>
-    </div>
+    </header>
 
-    <!-- 主要内容区 -->
-    <div class="main-content">
-      <!-- 左侧：统计和最近项目 -->
-      <div class="left-column">
-        <!-- 统计卡片 -->
-        <div class="stats-row">
-          <div class="mini-stat">
-            <div class="mini-stat-icon projects">
-              <el-icon><Folder /></el-icon>
-            </div>
-            <div class="mini-stat-info">
-              <div class="mini-stat-number">{{ projectCount }}</div>
-              <div class="mini-stat-label">项目</div>
-            </div>
-          </div>
+    <section class="quick-start-grid" aria-label="快速开始">
+      <button
+        v-for="action in quickActions"
+        :key="action.key"
+        class="quick-card"
+        type="button"
+        @click="action.run"
+      >
+        <span class="quick-card__icon">
+          <el-icon><component :is="action.icon" /></el-icon>
+        </span>
+        <span class="quick-card__content">
+          <strong>{{ action.title }}</strong>
+          <small>{{ action.description }}</small>
+        </span>
+        <el-icon class="quick-card__arrow"><ArrowRight /></el-icon>
+      </button>
+    </section>
 
-          <div class="mini-stat">
-            <div class="mini-stat-icon tasks">
-              <el-icon><Timer /></el-icon>
-            </div>
-            <div class="mini-stat-info">
-              <div class="mini-stat-number">{{ runningTasks }}</div>
-              <div class="mini-stat-label">进行中</div>
-            </div>
-          </div>
+    <section class="stats-grid" aria-label="工作台概览">
+      <article class="stat-card">
+        <span>素材</span>
+        <strong>{{ stats.assets }}</strong>
+      </article>
+      <article class="stat-card">
+        <span>任务</span>
+        <strong>{{ stats.tasks }}</strong>
+      </article>
+      <article class="stat-card">
+        <span>失败任务</span>
+        <strong>{{ stats.failedTasks }}</strong>
+      </article>
+      <article class="stat-card">
+        <span>图片 / 视频</span>
+        <strong>{{ stats.images }} / {{ stats.videos }}</strong>
+      </article>
+    </section>
 
-          <div class="mini-stat">
-            <div class="mini-stat-icon videos">
-              <el-icon><Share /></el-icon>
-            </div>
-            <div class="mini-stat-info">
-              <div class="mini-stat-number">{{ publishedVideos }}</div>
-              <div class="mini-stat-label">已发布</div>
-            </div>
+    <main class="dashboard-content">
+      <section class="dashboard-panel">
+        <div class="panel-header">
+          <div>
+            <h2>最近 Canvas</h2>
+            <p>继续编辑已有工作台，或新建一张画布。</p>
           </div>
-
-          <div class="mini-stat">
-            <div class="mini-stat-icon cost">
-              <el-icon><Money /></el-icon>
-            </div>
-            <div class="mini-stat-info">
-              <el-tooltip
-                content="基于已生成内容的成本估算,非实际扣费金额"
-                placement="top"
-              >
-                <div class="mini-stat-number cost-estimate">
-                  ≈¥{{ totalCost.toFixed(2) }}
-                </div>
-              </el-tooltip>
-              <div class="mini-stat-label">成本估算</div>
-            </div>
-          </div>
+          <el-button link @click="router.push('/canvas')">全部 Canvas</el-button>
         </div>
 
-        <!-- 最近项目 -->
-        <div class="recent-projects">
-          <div class="section-header">
-            <h3>最近项目</h3>
-            <el-button link @click="$router.push('/projects')">查看全部</el-button>
+        <div v-if="loadingCanvas" class="panel-state">
+          <el-skeleton :rows="3" animated />
+        </div>
+        <div v-else-if="!recentCanvas.length" class="panel-state">
+          暂无 Canvas，先从新建 Canvas 开始。
+        </div>
+        <div v-else class="canvas-list">
+          <button
+            v-for="document in recentCanvas"
+            :key="document.id"
+            class="canvas-row"
+            type="button"
+            @click="openCanvas(document)"
+          >
+            <span>
+              <strong>{{ document.title || '未命名 Canvas' }}</strong>
+              <small>{{ document.description || '继续编辑节点、媒体和生成结果' }}</small>
+            </span>
+            <em>{{ formatTime(document.updated_at || document.created_at) }}</em>
+          </button>
+        </div>
+      </section>
+
+      <section class="dashboard-panel">
+        <div class="panel-header">
+          <div>
+            <h2>最近素材</h2>
+            <p>图片、视频和 Prompt 可以直接加入最近 Canvas。</p>
           </div>
-          <div class="projects-list">
-            <div v-if="loading" class="loading-skeleton">
-              <el-skeleton :rows="3" animated />
+          <el-button link @click="router.push('/library')">打开素材库</el-button>
+        </div>
+
+        <div v-if="loadingAssets" class="panel-state">
+          <el-skeleton :rows="3" animated />
+        </div>
+        <div v-else-if="!recentAssets.length" class="panel-state">
+          暂无素材。可以先上传一张图片或一个 MP4。
+        </div>
+        <div v-else class="asset-grid">
+          <article
+            v-for="asset in recentAssets"
+            :key="asset.id || asset.object_key"
+            class="asset-tile"
+          >
+            <div class="asset-preview">
+              <img
+                v-if="asset.media_type === 'image'"
+                :src="asset.preview_url"
+                :alt="assetTitle(asset)"
+                loading="lazy"
+              />
+              <video
+                v-else-if="asset.media_type === 'video'"
+                :src="asset.stream_url || asset.preview_url"
+                muted
+                preload="metadata"
+              />
+              <pre v-else>{{ asset.summary || asset.text || assetTitle(asset) }}</pre>
             </div>
-            <div v-else-if="recentProjects.length === 0" class="empty-projects">
-              <el-icon size="32"><Document /></el-icon>
-              <p>暂无项目</p>
-              <el-button type="primary" plain @click="$router.push('/projects')">
-                创建第一个项目
-              </el-button>
-            </div>
-            <div v-else class="project-items">
-              <div
-                v-for="project in recentProjects"
-                :key="project.id"
-                class="project-item"
-                @click="$router.push(`/projects/${project.id}`)"
-              >
-                <div class="project-info">
-                  <h4>{{ project.title }}</h4>
-                  <p>{{ project.chapter_count }} 章节 · {{ project.word_count }} 字</p>
-                </div>
-                <div class="project-meta">
-                  <el-tag :type="getStatusType(project.status)" size="small">
-                    {{ getStatusText(project.status) }}
-                  </el-tag>
-                  <span class="project-time">{{ formatTime(project.updated_at) }}</span>
-                </div>
+            <div class="asset-body">
+              <strong>{{ assetTitle(asset) }}</strong>
+              <span>{{ mediaTypeLabel(asset.media_type) }} · {{ sourceLabel(asset.source) }}</span>
+              <div class="asset-actions">
+                <button type="button" @click="previewAsset(asset)">预览</button>
+                <button
+                  v-if="asset.media_type !== 'text'"
+                  type="button"
+                  @click="downloadAsset(asset)"
+                >
+                  下载
+                </button>
+                <button type="button" @click="addAssetToCanvas(asset)">加入 Canvas</button>
               </div>
             </div>
-          </div>
+          </article>
         </div>
-      </div>
+      </section>
 
-      <!-- 右侧：任务队列和活动 -->
-      <div class="right-column">
-        <!-- 任务队列 -->
-        <div class="task-queue">
-          <div class="section-header">
-            <h3>
-              <el-icon><Timer /></el-icon>
-              生成队列
-            </h3>
-            <el-button link @click="$router.push('/generation')">管理</el-button>
+      <section class="dashboard-panel task-panel">
+        <div class="panel-header">
+          <div>
+            <h2>最近任务</h2>
+            <p>查看生成状态、失败原因，或回到对应 Canvas 节点。</p>
           </div>
-          <div class="queue-content">
-            <div v-if="loading" class="loading-skeleton">
-              <el-skeleton :rows="2" animated />
-            </div>
-            <div v-else-if="!taskQueue || taskQueue.running_tasks === 0" class="empty-queue">
-              <el-icon size="32"><VideoCamera /></el-icon>
-              <p>队列为空</p>
-              <el-button type="primary" plain @click="$router.push('/generation')">
-                开始生成视频
-              </el-button>
-            </div>
-            <div v-else class="task-items">
-              <div
-                v-for="task in taskQueue.tasks"
-                :key="task.id"
-                class="task-item"
-              >
-                <div class="task-info">
-                  <el-icon><Timer /></el-icon>
-                  <span>{{ task.title }}</span>
-                </div>
-                <div class="task-progress">
-                  <el-progress
-                    :percentage="task.progress"
-                    :status="task.progress === 100 ? 'success' : undefined"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
+          <el-button link @click="router.push('/tasks')">任务中心</el-button>
         </div>
 
-        <!-- 最近活动 -->
-        <div class="recent-activity">
-          <div class="section-header">
-            <h3>
-              <el-icon><Clock /></el-icon>
-              最近活动
-            </h3>
-          </div>
-          <div class="activity-list">
-            <div v-if="loading" class="loading-skeleton">
-              <el-skeleton :rows="3" animated />
-            </div>
-            <div v-else-if="recentActivities.length === 0" class="empty-activity">
-              <el-icon size="32"><Document /></el-icon>
-              <p>暂无活动记录</p>
-            </div>
-            <div v-else class="activity-items">
-              <div
-                v-for="activity in recentActivities"
-                :key="activity.id"
-                class="activity-item"
-              >
-                <div class="activity-icon">
-                  <el-icon :component="getActivityIcon(activity.type)" />
-                </div>
-                <div class="activity-content">
-                  <p class="activity-desc">{{ activity.description }}</p>
-                  <span class="activity-time">{{ formatTime(activity.timestamp) }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
+        <div v-if="loadingTasks" class="panel-state">
+          <el-skeleton :rows="3" animated />
         </div>
-      </div>
-    </div>
-  </div>
+        <div v-else-if="!recentTasks.length" class="panel-state">
+          暂无任务历史。
+        </div>
+        <div v-else class="task-list">
+          <button
+            v-for="task in recentTasks"
+            :key="task.id"
+            class="task-row"
+            type="button"
+            @click="openTask(task)"
+          >
+            <span class="task-kind">{{ typeLabel(task.type) }}</span>
+            <span class="task-main">
+              <strong>{{ task.title || '未命名任务' }}</strong>
+              <small>{{ task.canvas_title || task.canvas_id || '未关联 Canvas' }}</small>
+            </span>
+            <span class="task-status" :data-status="task.status">
+              {{ statusLabel(task.status) }}
+            </span>
+          </button>
+        </div>
+      </section>
+    </main>
+  </section>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { useAuthStore } from '@/stores/auth'
+import { computed, markRaw, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Folder,
-  VideoPlay,
-  Promotion,
-  Timer,
-  Share,
-  Setting,
-  Document,
   ArrowRight,
-  Clock,
+  Collection,
+  MagicStick,
+  Picture,
+  Plus,
+  Refresh,
+  Share,
+  Timer,
+  Upload,
   VideoCamera,
-  Money,
-  Refresh
+  VideoPlay
 } from '@element-plus/icons-vue'
-import { dashboardService } from '@/services/dashboard'
-
-const authStore = useAuthStore()
-const router = useRouter()
-
-// 数据状态
-const loading = ref(false)
-const statistics = ref(null)
-const recentProjects = ref([])
-const recentActivities = ref([])
-const taskQueue = ref(null)
-
-// 计算属性 - 从统计数据中提取值
-const projectCount = computed(() => statistics.value?.projects?.total || 0)
-const runningTasks = computed(() => statistics.value?.tasks?.running_tasks || 0)
-const publishedVideos = computed(() => statistics.value?.generation?.generated_videos || 0)
-const totalCost = computed(() => statistics.value?.cost?.total || 0)
-
-// 加载仪表盘数据
-const loadDashboardData = async () => {
-  loading.value = true
-  try {
-    // 并行加载所有数据
-    const [stats, projects, activities, queue] = await Promise.all([
-      dashboardService.getStatistics(),
-      dashboardService.getRecentProjects(5),
-      dashboardService.getRecentActivities(10),
-      dashboardService.getTaskQueue()
-    ])
-
-    statistics.value = stats
-    recentProjects.value = projects.projects || []
-    recentActivities.value = activities.activities || []
-    taskQueue.value = queue
-  } catch (error) {
-    console.error('加载仪表盘数据失败:', error)
-    ElMessage.error('加载仪表盘数据失败，请稍后重试')
-  } finally {
-    loading.value = false
-  }
-}
-
-// 刷新数据
-const refreshData = async () => {
-  await loadDashboardData()
-  ElMessage.success('数据已刷新')
-}
-
-// 格式化时间
-const formatTime = (timestamp) => {
-  if (!timestamp) return ''
-  const date = new Date(timestamp)
-  const now = new Date()
-  const diff = now - date
-  const minutes = Math.floor(diff / 60000)
-  const hours = Math.floor(diff / 3600000)
-  const days = Math.floor(diff / 86400000)
-
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes}分钟前`
-  if (hours < 24) return `${hours}小时前`
-  if (days < 7) return `${days}天前`
-  return date.toLocaleDateString('zh-CN')
-}
-
-// 获取活动类型图标
-const getActivityIcon = (type) => {
-  switch (type) {
-    case 'project_created':
-      return Folder
-    case 'chapter_confirmed':
-      return Document
-    case 'video_generated':
-      return VideoCamera
-    default:
-      return Document
-  }
-}
-
-// 获取状态标签类型
-const getStatusType = (status) => {
-  const statusMap = {
-    uploaded: 'info',
-    parsing: 'warning',
-    parsed: 'success',
-    generating: 'warning',
-    completed: 'success',
-    failed: 'danger',
-    archived: 'info'
-  }
-  return statusMap[status] || 'info'
-}
-
-// 获取状态文本
-const getStatusText = (status) => {
-  const statusTextMap = {
-    uploaded: '已上传',
-    parsing: '解析中',
-    parsed: '已解析',
-    generating: '生成中',
-    completed: '已完成',
-    failed: '失败',
-    archived: '已归档'
-  }
-  return statusTextMap[status] || status
-}
+import { canvasService } from '@/services/canvas'
+import { taskHistoryService } from '@/services/taskHistory'
+import { fileService } from '@/services/upload'
 
 defineOptions({
   name: 'Dashboard'
 })
 
-// 向MainLayout提供header actions
-import { provide } from 'vue'
-provide('headerActions', [
-  {
-    text: '刷新',
-    type: 'default',
-    icon: Refresh,
-    action: refreshData
-  },
-  {
-    text: '项目管理',
-    type: 'default',
-    icon: Folder,
-    action: () => router.push('/projects')
-  },
-  {
-    text: '开始创作',
-    type: 'primary',
-    icon: VideoPlay,
-    action: () => router.push('/generation')
-  }
-])
+const router = useRouter()
+const uploadInput = ref(null)
+const refreshing = ref(false)
+const creating = ref(false)
+const uploading = ref(false)
+const loadingCanvas = ref(false)
+const loadingAssets = ref(false)
+const loadingTasks = ref(false)
+const recentCanvas = ref([])
+const recentAssets = ref([])
+const recentTasks = ref([])
+const assetTotal = ref(0)
+const taskTotal = ref(0)
 
-// 组件挂载时加载数据
-onMounted(() => {
-  loadDashboardData()
+const quickActions = [
+  {
+    key: 'canvas',
+    title: '新建 Canvas',
+    description: '从空白工作台开始组织节点',
+    icon: markRaw(Share),
+    run: () => createCanvas('blank')
+  },
+  {
+    key: 'image',
+    title: '图片创作',
+    description: '创建 Canvas，进入文生图流程',
+    icon: markRaw(Picture),
+    run: () => createCanvas('image')
+  },
+  {
+    key: 'video',
+    title: '视频创作',
+    description: '创建 Canvas，进入文生视频流程',
+    icon: markRaw(VideoPlay),
+    run: () => createCanvas('video')
+  },
+  {
+    key: 'i2v',
+    title: '图生视频',
+    description: '用图片节点作为参考生成视频',
+    icon: markRaw(VideoCamera),
+    run: () => createCanvas('i2v')
+  },
+  {
+    key: 'assistant',
+    title: 'Prompt / 分镜助手',
+    description: '创建 Canvas，使用右侧助手整理创意',
+    icon: markRaw(MagicStick),
+    run: () => createCanvas('assistant')
+  },
+  {
+    key: 'upload',
+    title: '上传素材',
+    description: uploading.value ? '正在上传...' : '上传 PNG / MP4 到素材库',
+    icon: markRaw(Upload),
+    run: () => triggerUpload()
+  },
+  {
+    key: 'library',
+    title: '打开素材库',
+    description: '筛选、预览、下载和加入 Canvas',
+    icon: markRaw(Collection),
+    run: () => router.push('/library')
+  },
+  {
+    key: 'tasks',
+    title: '任务中心',
+    description: '查看生成历史和失败原因',
+    icon: markRaw(Timer),
+    run: () => router.push('/tasks')
+  }
+]
+
+const stats = computed(() => {
+  const images = recentAssets.value.filter((asset) => asset.media_type === 'image').length
+  const videos = recentAssets.value.filter((asset) => asset.media_type === 'video').length
+  const failedTasks = recentTasks.value.filter((task) => task.status === 'failed').length
+  return {
+    assets: assetTotal.value || recentAssets.value.length,
+    tasks: taskTotal.value || recentTasks.value.length,
+    failedTasks,
+    images,
+    videos
+  }
 })
+
+const createCanvas = async (mode = 'blank') => {
+  creating.value = true
+  try {
+    const titleMap = {
+      blank: '新建创作 Canvas',
+      image: '图片创作 Canvas',
+      video: '视频创作 Canvas',
+      i2v: '图生视频 Canvas',
+      assistant: 'Prompt 分镜 Canvas'
+    }
+    const response = await canvasService.create({
+      title: `${titleMap[mode] || '新建 Canvas'} ${shortDateTime()}`,
+      description: mode === 'blank'
+        ? '从创作大厅创建'
+        : `从创作大厅进入 ${titleMap[mode] || '创作'}`
+    })
+    ElMessage.success('Canvas 已创建')
+    await router.push({
+      name: 'CanvasEditor',
+      params: { canvasId: response.id },
+      query: mode === 'blank' ? {} : { mode }
+    })
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '创建 Canvas 失败')
+  } finally {
+    creating.value = false
+  }
+}
+
+const loadDashboardData = async () => {
+  refreshing.value = true
+  await Promise.allSettled([
+    loadCanvas(),
+    loadAssets(),
+    loadTasks()
+  ])
+  refreshing.value = false
+}
+
+const loadCanvas = async () => {
+  loadingCanvas.value = true
+  try {
+    const response = await canvasService.list({ page: 1, size: 6 })
+    recentCanvas.value = response?.documents || []
+  } catch (error) {
+    recentCanvas.value = []
+    console.warn('加载最近 Canvas 失败:', error)
+  } finally {
+    loadingCanvas.value = false
+  }
+}
+
+const loadAssets = async () => {
+  loadingAssets.value = true
+  try {
+    const response = await fileService.listLibrary({
+      page: 1,
+      size: 8,
+      media_type: 'all',
+      source: 'all'
+    })
+    const entries = response?.items || response?.files || []
+    recentAssets.value = entries.map(normalizeAsset)
+    assetTotal.value = Number(response?.total || entries.length || 0)
+  } catch (error) {
+    recentAssets.value = []
+    assetTotal.value = 0
+    console.warn('加载最近素材失败:', error)
+  } finally {
+    loadingAssets.value = false
+  }
+}
+
+const loadTasks = async () => {
+  loadingTasks.value = true
+  try {
+    const response = await taskHistoryService.list({ limit: 8, offset: 0 })
+    recentTasks.value = response?.items || []
+    taskTotal.value = Number(response?.total || recentTasks.value.length || 0)
+  } catch (error) {
+    recentTasks.value = []
+    taskTotal.value = 0
+    console.warn('加载最近任务失败:', error)
+  } finally {
+    loadingTasks.value = false
+  }
+}
+
+const openCanvas = (document) => {
+  if (!document?.id) return
+  router.push({ name: 'CanvasEditor', params: { canvasId: document.id } })
+}
+
+const openTask = (task) => {
+  if (task?.canvas_id && task?.canvas_item_id) {
+    router.push({
+      name: 'CanvasEditor',
+      params: { canvasId: task.canvas_id },
+      query: { item_id: task.canvas_item_id }
+    })
+    return
+  }
+  router.push('/tasks')
+}
+
+const triggerUpload = () => {
+  uploadInput.value?.click()
+}
+
+const handleUploadChange = async (event) => {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+
+  uploading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    await fileService.uploadFile(formData)
+    ElMessage.success('素材已上传')
+    await loadAssets()
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '上传素材失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
+const getRecentCanvas = async () => {
+  if (recentCanvas.value[0]?.id) return recentCanvas.value[0]
+  const response = await canvasService.list({ page: 1, size: 1 })
+  if (response?.documents?.[0]?.id) return response.documents[0]
+  return await canvasService.create({
+    title: `素材导入 Canvas ${shortDateTime()}`,
+    description: '从创作大厅自动创建'
+  })
+}
+
+const addAssetToCanvas = async (asset) => {
+  try {
+    const canvas = await getRecentCanvas()
+    const graph = await canvasService.getLite(canvas.id)
+    const item = await canvasService.createItem(
+      canvas.id,
+      buildCanvasPayloadFromAsset(asset, graph?.items?.length || 0)
+    )
+    ElMessage.success('已加入最近 Canvas')
+    await router.push({
+      name: 'CanvasEditor',
+      params: { canvasId: canvas.id },
+      query: item?.id ? { item_id: item.id } : {}
+    })
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '加入 Canvas 失败')
+  }
+}
+
+const buildCanvasPayloadFromAsset = (asset, canvasItemCount = 0) => {
+  const mediaType = asset.media_type || 'text'
+  const offset = 100 + canvasItemCount * 32
+  const title = assetTitle(asset)
+  if (mediaType === 'image') {
+    return {
+      item_type: 'image',
+      title,
+      position_x: offset,
+      position_y: offset,
+      width: 360,
+      height: 260,
+      content: {
+        result_image_object_key: asset.object_key,
+        prompt: title,
+        promptTokens: title ? [{ type: 'text', text: title }] : [],
+        source_library_id: asset.id || asset.object_key
+      },
+      last_run_status: 'completed',
+      last_output: { result_image_object_key: asset.object_key }
+    }
+  }
+  if (mediaType === 'video') {
+    return {
+      item_type: 'video',
+      title,
+      position_x: offset,
+      position_y: offset,
+      width: 420,
+      height: 260,
+      content: {
+        result_video_object_key: asset.object_key,
+        prompt: title,
+        promptTokens: title ? [{ type: 'text', text: title }] : [],
+        source_library_id: asset.id || asset.object_key
+      },
+      last_run_status: 'completed',
+      last_output: { result_video_object_key: asset.object_key }
+    }
+  }
+  const text = String(asset.text || asset.summary || title).trim()
+  return {
+    item_type: 'text',
+    title: title || 'Prompt 素材',
+    position_x: offset,
+    position_y: offset,
+    width: 360,
+    height: 220,
+    content: {
+      text,
+      prompt: text,
+      promptTokens: text ? [{ type: 'text', text }] : [],
+      source_library_id: asset.id || asset.object_key,
+      saved_to_library: true
+    },
+    last_run_status: 'completed',
+    last_output: { text }
+  }
+}
+
+const previewAsset = (asset) => {
+  if (asset.media_type === 'text') {
+    router.push('/library')
+    return
+  }
+  const url = asset.media_type === 'video'
+    ? asset.stream_url || asset.preview_url
+    : asset.preview_url
+  if (url) window.open(toAbsoluteUrl(url), '_blank', 'noopener,noreferrer')
+}
+
+const downloadAsset = (asset) => {
+  const url = asset.download_url || asset.stream_url || asset.preview_url
+  if (url) window.open(toAbsoluteUrl(url), '_blank', 'noopener,noreferrer')
+}
+
+const normalizeAsset = (asset = {}) => {
+  const objectKey = String(asset.object_key || asset.storage_key || '').trim()
+  const mediaType = String(asset.media_type || '').trim() || mediaTypeFromObjectKey(objectKey) || 'text'
+  return {
+    ...asset,
+    id: asset.id || objectKey,
+    object_key: objectKey,
+    media_type: mediaType,
+    filename: asset.filename || asset.title || objectKey.split('/').pop() || '素材',
+    title: asset.title || asset.filename || '',
+    preview_url: asset.preview_url || (objectKey && mediaType !== 'text' ? mediaPathForObjectKey(objectKey, 'preview') : ''),
+    download_url: asset.download_url || (objectKey && mediaType !== 'text' ? mediaPathForObjectKey(objectKey, 'download') : ''),
+    stream_url: asset.stream_url || (mediaType === 'video' && objectKey ? mediaPathForObjectKey(objectKey, 'stream') : '')
+  }
+}
+
+const mediaTypeFromObjectKey = (objectKey = '') => {
+  const suffix = String(objectKey || '').split('?')[0].split('.').pop()?.toLowerCase()
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].includes(suffix)) return 'image'
+  if (['mp4', 'webm', 'mov'].includes(suffix)) return 'video'
+  return ''
+}
+
+const mediaPathForObjectKey = (objectKey = '', mode = 'preview') => {
+  const cleanKey = String(objectKey || '').trim().replace(/^\/+/, '')
+  return cleanKey ? `/api/v1/media/${mode}/${cleanKey}` : ''
+}
+
+const toAbsoluteUrl = (url = '') => {
+  const value = String(url || '').trim()
+  if (!value) return ''
+  if (/^https?:\/\//i.test(value)) return value
+  return `${window.location.origin}${value.startsWith('/') ? value : `/${value}`}`
+}
+
+const assetTitle = (asset = {}) =>
+  String(asset.title || asset.filename || asset.summary || asset.object_key || '素材').trim()
+
+const mediaTypeLabel = (type = '') => {
+  if (type === 'image') return '图片'
+  if (type === 'video') return '视频'
+  if (type === 'text') return '文本/Prompt'
+  return '素材'
+}
+
+const sourceLabel = (source = '') => {
+  if (source === 'canvas') return 'Canvas'
+  if (source === 'generated') return '生成结果'
+  if (source === 'upload') return '上传'
+  return '未知'
+}
+
+const typeLabel = (type = '') =>
+  ({
+    image: '图片',
+    video: '视频',
+    text: '文本',
+    assistant: '助手'
+  })[type] || type || '任务'
+
+const statusLabel = (status = '') =>
+  ({
+    pending: '排队中',
+    processing: '处理中',
+    completed: '已完成',
+    failed: '失败'
+  })[status] || status || '未知'
+
+const formatTime = (value = '') => {
+  if (!value) return '刚刚'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date)
+}
+
+const shortDateTime = () =>
+  new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date())
+
+onMounted(loadDashboardData)
 </script>
 
 <style scoped>
-/* 仪表盘容器 */
-.dashboard {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
+.dashboard-page {
+  min-height: 100%;
+  padding: 24px;
+  background: var(--bg-primary);
 }
 
-/* 页面头部信息 */
-.page-header {
+.dashboard-header {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 auto 18px;
+  max-width: 1480px;
 }
 
-.page-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  font-size: var(--text-xl);
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
-}
-
-.title-icon {
-  font-size: 20px;
+.dashboard-eyebrow {
+  margin: 0 0 6px;
   color: var(--primary-color);
-  padding: 6px;
-  background: rgba(32, 33, 36, 0.1);
-  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 800;
 }
 
-.page-description {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
+.dashboard-header h1 {
   margin: 0;
-  line-height: 1.4;
-}
-
-/* 快速操作入口 */
-.quick-actions {
-  margin-bottom: var(--space-xl);
-}
-
-.quick-actions .section-header {
-  text-align: center;
-  margin-bottom: var(--space-xl);
-}
-
-.quick-actions .section-header h2 {
-  font-size: var(--text-2xl);
-  font-weight: 700;
   color: var(--text-primary);
-  margin: 0 0 var(--space-sm) 0;
+  font-size: 28px;
+  line-height: 1.2;
 }
 
-.quick-actions .section-header p {
-  font-size: var(--text-base);
+.dashboard-subtitle {
+  margin: 8px 0 0;
   color: var(--text-secondary);
-  margin: 0;
+  font-size: 14px;
 }
 
-.action-grid {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr;
-  gap: var(--space-lg);
-}
-
-.quick-action {
+.dashboard-header__actions {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: var(--space-xl) var(--space-lg);
-  background: var(--bg-secondary);
-  border-radius: var(--radius-xl);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.hidden-upload {
+  display: none;
+}
+
+.quick-start-grid,
+.stats-grid,
+.dashboard-content {
+  max-width: 1480px;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.quick-start-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.quick-card,
+.canvas-row,
+.task-row,
+.asset-actions button {
   border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   cursor: pointer;
-  transition: all var(--transition-base);
-  position: relative;
-  overflow: hidden;
-  z-index: 1;
 }
 
-.quick-action:hover {
-  transform: translateY(-4px);
-  box-shadow: var(--shadow-lg);
+.quick-card {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 12px;
+  min-height: 86px;
+  padding: 14px;
+  text-align: left;
+  transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.quick-card:hover {
+  transform: translateY(-2px);
   border-color: var(--primary-color);
+  box-shadow: 0 12px 24px rgba(31, 49, 88, 0.08);
 }
 
-.quick-action:hover .action-arrow {
-  transform: translateX(4px);
-}
-
-.primary-action {
-  background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
-  color: white;
-  border: none;
-  grid-row: span 2;
-  box-shadow: var(--shadow-md);
-}
-
-.primary-action:hover {
-  box-shadow: 0 12px 35px rgba(32, 33, 36, 0.4);
-  transform: translateY(-6px);
-}
-
-.action-icon-large {
-  width: 72px;
-  height: 72px;
-  border-radius: var(--radius-xl);
-  display: flex;
+.quick-card__icon {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.15);
-  margin-bottom: var(--space-lg);
-  position: relative;
-  z-index: 2;
-  backdrop-filter: blur(10px);
-}
-
-.action-icon {
-  width: 52px;
-  height: 52px;
-  border-radius: var(--radius-lg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
-  color: white;
-  margin-bottom: var(--space-md);
-  position: relative;
-  z-index: 2;
-  box-shadow: var(--shadow-sm);
-}
-
-.primary-action .action-icon {
-  background: rgba(255, 255, 255, 0.15);
-  color: white;
-}
-
-.action-content h3 {
-  font-size: var(--text-xl);
-  font-weight: 700;
-  margin: 0 0 var(--space-xs) 0;
-  color: var(--text-primary);
-  position: relative;
-  z-index: 2;
-}
-
-.primary-action .action-content h3 {
-  color: white;
-}
-
-.action-content h4 {
-  font-size: var(--text-lg);
-  font-weight: 600;
-  margin: 0 0 var(--space-xs) 0;
-  color: var(--text-primary);
-  position: relative;
-  z-index: 2;
-}
-
-.action-content p {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  margin: 0;
-  position: relative;
-  z-index: 2;
-}
-
-.primary-action .action-content p {
-  color: rgba(255, 255, 255, 0.9);
-}
-
-.action-badge {
-  position: absolute;
-  top: var(--space-md);
-  right: var(--space-md);
-  background: rgba(255, 255, 255, 0.25);
-  color: white;
-  padding: var(--space-xs) var(--space-sm);
-  border-radius: var(--radius-full);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  backdrop-filter: blur(10px);
-  z-index: 2;
-}
-
-.action-arrow {
-  position: absolute;
-  bottom: var(--space-md);
-  right: var(--space-md);
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  background: #eef3ff;
   color: var(--primary-color);
-  transition: all var(--transition-base);
-  z-index: 2;
+  font-size: 20px;
 }
 
-.action-glow {
-  position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 0%, transparent 70%);
-  opacity: 0;
-  transition: opacity var(--transition-base);
-  z-index: 1;
+.quick-card__content {
+  min-width: 0;
 }
 
-.primary-action:hover .action-glow {
-  opacity: 1;
-}
-
-/* 主要内容区 */
-.main-content {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-xl);
-}
-
-/* 统计行 */
-.stats-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-md);
-  margin-bottom: var(--space-xl);
-}
-
-.mini-stat {
-  display: flex;
-  align-items: center;
-  padding: var(--space-md);
-  background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-primary);
-}
-
-.mini-stat-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-lg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  margin-right: var(--space-md);
-}
-
-.mini-stat-icon.projects {
-  background: var(--info-light);
-  color: var(--info-dark);
-}
-
-.mini-stat-icon.tasks {
-  background: var(--secondary-color); /* Grayish */
-  color: white;
-}
-
-.mini-stat-icon.videos {
-  background: var(--primary-light);
-  color: white;
-}
-
-.mini-stat-icon.cost {
-  background: var(--warning-light);
-  color: var(--warning-dark);
-}
-
-.mini-stat-info {
-  flex: 1;
-}
-
-.mini-stat-number {
-  font-size: var(--text-xl);
-  font-weight: 700;
+.quick-card__content strong,
+.asset-body strong,
+.canvas-row strong,
+.task-main strong {
+  display: block;
+  overflow: hidden;
   color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-card__content small,
+.canvas-row small,
+.task-main small {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-card__arrow {
+  color: var(--text-tertiary);
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stat-card {
+  min-height: 74px;
+  padding: 14px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.stat-card span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.stat-card strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-primary);
+  font-size: 24px;
   line-height: 1;
 }
 
-.mini-stat-number.cost-estimate {
-  cursor: help;
+.dashboard-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 16px;
+  align-items: start;
 }
 
-.mini-stat-label {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-/* 区块样式 */
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--space-md);
-}
-
-.section-header h3 {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  font-size: var(--text-lg);
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
-}
-
-.recent-projects,
-.task-queue,
-.recent-activity {
+.dashboard-panel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
   background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-primary);
-  padding: var(--space-lg);
-  margin-bottom: var(--space-lg);
 }
 
-/* 空状态样式 */
-.empty-projects,
-.empty-queue,
-.empty-activity {
-  text-align: center;
-  padding: var(--space-2xl) var(--space-lg);
-  color: var(--text-secondary);
+.task-panel {
+  grid-column: 1 / -1;
 }
 
-.empty-projects .el-icon,
-.empty-queue .el-icon,
-.empty-activity .el-icon {
-  color: var(--text-tertiary);
-  opacity: 0.6;
-  margin-bottom: var(--space-md);
-}
-
-.empty-projects p,
-.empty-queue p,
-.empty-activity p {
-  margin: 0 0 var(--space-md) 0;
-  font-size: var(--text-base);
-}
-
-/* 加载骨架屏 */
-.loading-skeleton {
-  padding: var(--space-lg);
-}
-
-/* 项目列表项 */
-.project-items {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-}
-
-.project-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--space-md);
-  background: var(--bg-primary);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-primary);
-  cursor: pointer;
-  transition: all var(--transition-base);
-}
-
-.project-item:hover {
-  border-color: var(--primary-color);
-  box-shadow: var(--shadow-sm);
-  transform: translateX(4px);
-}
-
-.project-info h4 {
-  font-size: var(--text-base);
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0 0 var(--space-xs) 0;
-}
-
-.project-info p {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  margin: 0;
-}
-
-.project-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--space-xs);
-}
-
-.project-time {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-
-/* 任务列表项 */
-.task-items {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-}
-
-.task-item {
-  padding: var(--space-md);
-  background: var(--bg-primary);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-primary);
-}
-
-.task-info {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  margin-bottom: var(--space-sm);
-  font-size: var(--text-sm);
-  color: var(--text-primary);
-}
-
-.task-progress {
-  width: 100%;
-}
-
-/* 活动列表项 */
-.activity-items {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-}
-
-.activity-item {
+.panel-header {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-md);
-  padding: var(--space-md);
-  background: var(--bg-primary);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-primary);
-  transition: all var(--transition-base);
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
-.activity-item:hover {
-  border-color: var(--primary-color);
-  box-shadow: var(--shadow-sm);
+.panel-header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
 }
 
-.activity-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-md);
+.panel-header p {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.panel-state {
+  padding: 24px;
+  border: 1px dashed var(--border-primary);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.canvas-list,
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.canvas-row,
+.task-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: var(--primary-light);
-  color: var(--primary-color);
-  flex-shrink: 0;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px;
+  text-align: left;
 }
 
-.activity-content {
+.canvas-row span,
+.task-main {
+  min-width: 0;
   flex: 1;
 }
 
-.activity-desc {
-  font-size: var(--text-sm);
-  color: var(--text-primary);
-  margin: 0 0 var(--space-xs) 0;
-}
-
-.activity-time {
-  font-size: var(--text-xs);
+.canvas-row em {
+  flex-shrink: 0;
   color: var(--text-tertiary);
+  font-size: 12px;
+  font-style: normal;
 }
 
-/* 响应式设计 */
-@media (max-width: 1200px) {
-  .action-grid {
-    grid-template-columns: 1fr 1fr 1fr 1fr;
-  }
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+}
 
-  .primary-action {
-    grid-row: span 1;
+.asset-tile {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.asset-preview {
+  height: 132px;
+  overflow: hidden;
+  background: #eef2f6;
+}
+
+.asset-preview img,
+.asset-preview video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.asset-preview pre {
+  height: 100%;
+  margin: 0;
+  padding: 12px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.asset-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.asset-body span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.asset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.asset-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.asset-actions button:last-child {
+  border-color: var(--primary-color);
+  background: var(--primary-color);
+  color: white;
+}
+
+.task-kind {
+  width: 58px;
+  flex-shrink: 0;
+  color: var(--primary-color);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.task-status {
+  flex-shrink: 0;
+  min-width: 66px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: #eef2f6;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.task-status[data-status='completed'] {
+  background: #e8f7ee;
+  color: #227447;
+}
+
+.task-status[data-status='processing'],
+.task-status[data-status='pending'] {
+  background: #fff5dc;
+  color: #8a5b00;
+}
+
+.task-status[data-status='failed'] {
+  background: #ffecec;
+  color: #b72d2d;
+}
+
+@media (max-width: 1100px) {
+  .dashboard-content,
+  .stats-grid {
+    grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 968px) {
-  .action-grid {
-    grid-template-columns: 1fr 1fr;
+@media (max-width: 720px) {
+  .dashboard-page {
+    padding: 16px;
   }
 
-  .main-content {
-    grid-template-columns: 1fr;
-    gap: var(--space-lg);
+  .dashboard-header {
+    flex-direction: column;
   }
 
-  .stats-row {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 768px) {
-  .page-header {
-    gap: 2px;
-  }
-
-  .page-title {
-    font-size: var(--text-lg);
-  }
-
-  .title-icon {
-    font-size: 16px;
-    padding: 4px;
-  }
-
-  .page-description {
-    font-size: var(--text-xs);
-  }
-
-  .action-grid {
-    grid-template-columns: 1fr;
-    gap: var(--space-md);
-  }
-
-  .quick-action {
-    padding: var(--space-lg) var(--space-md);
-  }
-
-  .action-icon-large {
-    width: 48px;
-    height: 48px;
-  }
-
-  .action-icon {
-    width: 40px;
-    height: 40px;
-  }
-
-  .action-content h3 {
-    font-size: var(--text-base);
-  }
-
-  .action-content h4 {
-    font-size: var(--text-sm);
-  }
-
-  .action-content p {
-    font-size: var(--text-xs);
-  }
-
-  .stats-row {
-    grid-template-columns: 1fr;
-    gap: var(--space-sm);
-  }
-
-  .mini-stat {
-    padding: var(--space-sm);
-  }
-
-  .mini-stat-icon {
-    width: 32px;
-    height: 32px;
-  }
-
-  .mini-stat-number {
-    font-size: var(--text-lg);
-  }
-
-  .section-header h3 {
-    font-size: var(--text-base);
-  }
-
-  .recent-projects,
-  .task-queue,
-  .recent-activity {
-    padding: var(--space-md);
-    margin-bottom: var(--space-md);
-  }
-
-  .empty-projects,
-  .empty-queue,
-  .empty-activity {
-    padding: var(--space-lg) var(--space-md);
-  }
-}
-
-@media (max-width: 480px) {
-  .action-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .quick-action {
-    padding: var(--space-md);
-  }
-
-  .action-icon-large,
-  .action-icon {
-    width: 36px;
-    height: 36px;
-  }
-
-  .stats-row {
-    margin-bottom: var(--space-lg);
-  }
-
-  .recent-projects,
-  .task-queue,
-  .recent-activity {
-    padding: var(--space-sm);
+  .dashboard-header__actions {
+    justify-content: flex-start;
+    width: 100%;
   }
 }
 </style>
