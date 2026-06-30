@@ -264,14 +264,14 @@ const quickActions = [
     title: 'Prompt / 分镜助手',
     description: '创建 Canvas，使用右侧助手整理创意',
     icon: markRaw(MagicStick),
-    run: () => createCanvas('assistant')
+    run: () => createCanvas('storyboard')
   },
   {
     key: 'upload',
     title: '上传素材',
-    description: uploading.value ? '正在上传...' : '上传 PNG / MP4 到素材库',
+    description: '创建 Canvas，打开上传 / 最近素材入口',
     icon: markRaw(Upload),
-    run: () => triggerUpload()
+    run: () => createCanvas('upload')
   },
   {
     key: 'library',
@@ -310,7 +310,8 @@ const createCanvas = async (mode = 'blank') => {
       image: '图片创作 Canvas',
       video: '视频创作 Canvas',
       i2v: '图生视频 Canvas',
-      assistant: 'Prompt 分镜 Canvas'
+      storyboard: 'Prompt 分镜 Canvas',
+      upload: '素材上传 Canvas'
     }
     const response = await canvasService.create({
       title: `${titleMap[mode] || '新建 Canvas'} ${shortDateTime()}`,

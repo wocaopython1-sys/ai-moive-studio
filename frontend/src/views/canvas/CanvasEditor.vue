@@ -163,6 +163,22 @@
             <p>{{ assetItems.length }} 个可加入 Canvas 的图片/视频</p>
           </div>
           <div class="canvas-asset-panel__header-actions">
+            <input
+              ref="assetUploadInput"
+              class="canvas-asset-panel__upload-input"
+              type="file"
+              accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.mp4,.webm,.mov,image/*,video/mp4,video/webm,video/quicktime"
+              @change="handleAssetUploadChange"
+            />
+            <button
+              class="canvas-asset-panel__icon-btn"
+              type="button"
+              :disabled="assetLoading || uploading"
+              data-testid="upload-asset-from-canvas"
+              @click="triggerAssetUpload"
+            >
+              {{ uploading ? '上传中' : '上传' }}
+            </button>
             <button
               class="canvas-asset-panel__icon-btn"
               type="button"
@@ -404,6 +420,7 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   const textStudioRef = ref(null)
   const imageStudioRef = ref(null)
   const videoStudioRef = ref(null)
+  const assetUploadInput = ref(null)
   const uploading = ref(false)
   const catalogLoading = ref(false)
   const styleReferencePreviewMap = ref({})
@@ -422,6 +439,29 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   const assetLoading = ref(false)
   const assetItems = ref([])
   const relationSourceItemId = ref('')
+  const handledEntryModeKeys = new Set()
+
+  const entryModeConfigs = {
+    image: {
+      title: '图片 Prompt',
+      text: '请输入你想生成的图片描述。',
+      successMessage: '已进入图片创作模式，可以编辑 Prompt 后生成图片。'
+    },
+    video: {
+      title: '视频 Prompt',
+      text: '请输入你想生成的视频描述。',
+      successMessage: '已进入视频创作模式，可以编辑 Prompt 后生成视频。'
+    },
+    storyboard: {
+      title: '故事 / 分镜输入',
+      text: '请输入故事梗概、角色、场景或镜头要求。',
+      successMessage: '已进入 Prompt / 分镜助手模式。'
+    }
+  }
+  const entryAssetModeMessages = {
+    i2v: '请选择一张图片作为图生视频参考。',
+    upload: '上传图片、视频或选择已有素材加入 Canvas。'
+  }
 
   const {
     loading,
@@ -1246,6 +1286,31 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     await loadAssetItems()
   }
 
+  const triggerAssetUpload = () => {
+    assetUploadInput.value?.click()
+  }
+
+  const handleAssetUploadChange = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    uploading.value = true
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      await fileService.uploadFile(formData)
+      await loadAssetItems()
+      ElMessage.success('素材已上传，可加入 Canvas')
+    } catch (error) {
+      ElMessage.error(
+        error?.response?.data?.detail || error?.message || '上传素材失败'
+      )
+    } finally {
+      uploading.value = false
+    }
+  }
+
   const copyAssetUrl = async (asset) => {
     await copyTextToClipboard(toAbsoluteUrl(asset?.preview_url), '素材 URL 已复制')
   }
@@ -1312,6 +1377,8 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     const size =
       nodeType === 'video'
         ? { width: 420, height: 260 }
+        : nodeType === 'text'
+          ? { width: 320, height: 220 }
         : { width: 360, height: 260 }
     const safeScale = Math.max(Number(zoom.value || 1), 0.1)
     const visibleWidth =
@@ -1377,6 +1444,101 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       return
     }
     await focusCanvasItem(targetItem)
+  }
+
+  const normalizeEntryMode = () => {
+    const rawMode = Array.isArray(route.query.mode)
+      ? route.query.mode[0]
+      : route.query.mode
+    return String(rawMode || '').trim()
+  }
+
+  const shouldForceEntryMode = () =>
+    String(
+      Array.isArray(route.query.force) ? route.query.force[0] : route.query.force || ''
+    ).trim() === '1'
+
+  const clearEntryModeQuery = async () => {
+    if (!route.query.mode && !route.query.force) return
+    const nextQuery = { ...route.query }
+    delete nextQuery.mode
+    delete nextQuery.force
+    await router.replace({
+      name: route.name || 'CanvasEditor',
+      params: route.params,
+      query: nextQuery
+    })
+  }
+
+  const hasStarterForMode = (mode) =>
+    items.value.some(
+      (item) =>
+        item.item_type === 'text' &&
+        item.content?.phase1e_starter === true &&
+        item.content?.starter_mode === mode
+    )
+
+  const initializeEntryModeIfPresent = async () => {
+    const mode = normalizeEntryMode()
+    if (!mode || (!entryModeConfigs[mode] && !entryAssetModeMessages[mode])) {
+      return
+    }
+    if (route.query.item_id || route.query.itemId) {
+      return
+    }
+
+    const canvasId = String(document.value?.id || route.params.canvasId || '').trim()
+    if (!canvasId || loading.value) return
+
+    const force = shouldForceEntryMode()
+    const entryKey = `${canvasId}:${mode}:${force ? 'force' : 'normal'}`
+    if (handledEntryModeKeys.has(entryKey)) {
+      await clearEntryModeQuery()
+      return
+    }
+    handledEntryModeKeys.add(entryKey)
+
+    try {
+      if (entryAssetModeMessages[mode]) {
+        await openAssetDrawer()
+        ElMessage.success(entryAssetModeMessages[mode])
+        return
+      }
+
+      if (!force && (items.value.length > 0 || hasStarterForMode(mode))) {
+        return
+      }
+
+      const config = entryModeConfigs[mode]
+      const placement = getVisibleCanvasCenterPosition('text')
+      const item = await createItem('text', {
+        title: config.title,
+        position: {
+          position_x: placement.position_x,
+          position_y: placement.position_y
+        },
+        width: placement.width,
+        height: placement.height,
+        content: {
+          text: config.text,
+          text_preview: config.text,
+          prompt: config.text,
+          promptTokens: [{ type: 'text', text: config.text }],
+          phase1e_starter: true,
+          starter_mode: mode
+        }
+      })
+      if (item?.id) {
+        await focusCanvasItem(item)
+        ElMessage.success(config.successMessage)
+      }
+    } catch (error) {
+      ElMessage.error(
+        error?.response?.data?.detail || error?.message || '初始化创作入口失败'
+      )
+    } finally {
+      await clearEntryModeQuery()
+    }
   }
 
   const openCanvasTasks = () => {
@@ -2536,9 +2698,17 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
         historySelectingId.value = ''
         await loadDocument(canvasId)
         await focusRouteItemIfPresent()
+        await initializeEntryModeIfPresent()
       }
     },
     { immediate: true }
+  )
+
+  watch(
+    () => route.query.mode,
+    async () => {
+      await initializeEntryModeIfPresent()
+    }
   )
 
   watch(
@@ -2627,6 +2797,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .canvas-asset-panel__upload-input {
+    display: none;
   }
 
   .canvas-asset-panel__icon-btn,
