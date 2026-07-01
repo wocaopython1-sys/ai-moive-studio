@@ -2443,6 +2443,9 @@ class CanvasGenerationService(BaseService):
                 image_bytes = await storage_client.download_file(normalized)
                 resolved.append(self._build_image_data_url(image_bytes))
                 continue
+            if prefer_public_urls and normalized.startswith(("http://", "https://")):
+                resolved.append(normalized)
+                continue
 
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
                 response = await client.get(normalized)

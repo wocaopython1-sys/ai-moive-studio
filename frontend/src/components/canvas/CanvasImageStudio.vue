@@ -228,9 +228,11 @@
           <button
             v-if="draft.resultImageUrl"
             class="history-action-btn"
+            title="用这张图生成视频"
+            aria-label="用这张图生成视频"
             @click="$emit('create-video-from-image')"
           >
-            生成视频
+            用这张图生成视频
           </button>
           <button
             class="generate-action-btn"

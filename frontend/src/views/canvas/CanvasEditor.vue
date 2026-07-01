@@ -2182,11 +2182,20 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     if (!selectedItem.value || selectedItem.value.item_type !== 'image') return
     try {
       const source = selectedItem.value
+      const videoPrompt = String(
+        source.content?.videoPrompt ||
+          source.content?.prompt ||
+          source.title ||
+          '让画面自然运动，镜头轻微推进'
+      ).trim()
       await createLinkedNodeFromItem(source, 'video', {
         title: '由图片生成视频',
         content: {
-          prompt: String(source.content?.prompt || source.title || '').trim(),
-          promptTokens: [buildMentionTokenForItem(source)]
+          prompt: videoPrompt,
+          promptTokens: [
+            buildMentionTokenForItem(source),
+            { type: 'text', text: ` ${videoPrompt}` }
+          ]
         }
       })
       ElMessage.success('已创建图生视频节点')
