@@ -11,6 +11,14 @@ export const taskHistoryService = {
 
   retry(id) {
     return post(`/tasks/history/${id}/retry`)
+  },
+
+  refresh(id) {
+    return post(`/tasks/history/${id}/refresh`)
+  },
+
+  resume(id) {
+    return post(`/tasks/history/${id}/resume`)
   }
 }
 

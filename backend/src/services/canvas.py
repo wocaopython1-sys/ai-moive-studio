@@ -612,6 +612,15 @@ class CanvasService(BaseService):
 
 
 class CanvasTaskHistoryService(BaseService):
+    def _provider_task_id_from_payload(self, result_payload: Dict[str, Any], generation_id: Any) -> str:
+        provider_task_id = str((result_payload or {}).get("provider_task_id") or "").strip()
+        if provider_task_id:
+            return provider_task_id
+        local_task_id = str((result_payload or {}).get("task_id") or "").strip()
+        if local_task_id and not is_likely_celery_task_id(local_task_id, str(generation_id)):
+            return local_task_id
+        return ""
+
     def _normalize_status(self, status_value: Any) -> str:
         status_text = str(status_value or "").strip().lower()
         if status_text in {"pending", "queued"}:
@@ -740,6 +749,8 @@ class CanvasTaskHistoryService(BaseService):
         content = item.content_json or {}
         task_type = self._task_type_from_generation(generation, item)
         media_payload = self._media_payload(item.item_type, result_payload, content)
+        status = self._normalize_status(generation.status)
+        provider_task_id = self._provider_task_id_from_payload(result_payload, generation.id)
         source_item_id = ""
         prompt_tokens = request_payload.get("prompt_tokens") or content.get("promptTokens") or []
         if isinstance(prompt_tokens, list):
@@ -750,7 +761,7 @@ class CanvasTaskHistoryService(BaseService):
         return {
             "id": str(generation.id),
             "type": task_type,
-            "status": self._normalize_status(generation.status),
+            "status": status,
             "title": item.title or f"{task_type} 生成任务",
             "canvas_id": str(document.id),
             "canvas_title": document.title or "",
@@ -762,11 +773,26 @@ class CanvasTaskHistoryService(BaseService):
             "stream_url": media_payload["stream_url"],
             "object_key": media_payload["object_key"],
             "error_message": generation.error_message or item.last_run_error or "",
+            "provider_task_id": provider_task_id,
             "provider": self._provider_from_payloads(request_payload, result_payload),
             "model": self._model_from_payloads(request_payload, item),
             "params": self._params_summary_from_payloads(request_payload),
             "result_count": self._result_count_from_payload(result_payload),
             "result_summary": self._result_summary_from_payload(result_payload),
+            "can_retry": status == CanvasRunStatus.FAILED.value,
+            "can_refresh_status": bool(
+                task_type == CanvasGenerationType.VIDEO.value
+                and provider_task_id
+                and (
+                    status in {CanvasRunStatus.FAILED.value, CanvasRunStatus.PROCESSING.value, CanvasRunStatus.PENDING.value}
+                    or not media_payload["object_key"]
+                )
+            ),
+            "can_resume_sync": bool(
+                task_type == CanvasGenerationType.VIDEO.value
+                and provider_task_id
+                and not media_payload["object_key"]
+            ),
             "created_at": generation.created_at.isoformat() if generation.created_at else "",
             "updated_at": generation.updated_at.isoformat() if generation.updated_at else "",
             "request_payload": request_payload,
@@ -899,6 +925,125 @@ class CanvasTaskHistoryService(BaseService):
         if not row:
             raise NotFoundError("任务历史不存在", resource_id=history_id, resource_type="task_history")
         return self._generation_to_history_item(row[0], row[1], row[2])
+
+    async def _load_generation_for_action(self, history_id: str, user_id: str) -> Tuple[CanvasItemGeneration, CanvasItem, CanvasDocument]:
+        if history_id.startswith("item:"):
+            raise BusinessLogicError("该任务记录不支持自动重试，请回到 Canvas 节点操作")
+
+        stmt = (
+            select(CanvasItemGeneration, CanvasItem, CanvasDocument)
+            .join(CanvasItem, CanvasItem.id == CanvasItemGeneration.item_id)
+            .join(CanvasDocument, CanvasDocument.id == CanvasItemGeneration.document_id)
+            .where(
+                CanvasItemGeneration.id == ensure_canvas_uuid(history_id),
+                CanvasDocument.user_id == ensure_canvas_uuid(user_id),
+            )
+        )
+        row = (await self.execute(stmt)).first()
+        if not row:
+            raise NotFoundError("任务历史不存在", resource_id=history_id, resource_type="task_history")
+        return row[0], row[1], row[2]
+
+    def _dispatch_generation_retry(self, generation_type: str, generation_id: str) -> str:
+        from src.tasks.canvas import generate_canvas_image, generate_canvas_text, generate_canvas_video
+
+        if generation_type == CanvasGenerationType.TEXT.value:
+            return generate_canvas_text.delay(generation_id).id
+        if generation_type == CanvasGenerationType.IMAGE.value:
+            return generate_canvas_image.delay(generation_id).id
+        if generation_type == CanvasGenerationType.VIDEO.value:
+            return generate_canvas_video.delay(generation_id).id
+        raise BusinessLogicError("不支持的任务类型，无法重试")
+
+    async def retry_history_item(self, history_id: str, user_id: str) -> Dict[str, Any]:
+        generation, item, document = await self._load_generation_for_action(history_id, user_id)
+        status = self._normalize_status(generation.status)
+        if status != CanvasRunStatus.FAILED.value:
+            raise BusinessLogicError("只有失败任务可以重试")
+
+        request_payload = dict(generation.request_payload_json or {})
+        if not request_payload:
+            raise BusinessLogicError("该任务缺少原始请求参数，无法自动重试")
+
+        canvas_service = CanvasService(self.db_session)
+        retry_generation = await canvas_service.create_pending_generation(
+            item,
+            user_id,
+            generation.generation_type,
+            request_payload,
+            result_payload={"retry_of": str(generation.id)},
+        )
+        await self.commit()
+
+        task_id = self._dispatch_generation_retry(generation.generation_type, str(retry_generation.id))
+        await canvas_service.update_generation(
+            retry_generation,
+            item,
+            CanvasRunStatus.PENDING.value,
+            result_payload={
+                "task_id": task_id,
+                "retry_of": str(generation.id),
+            },
+        )
+        await self.commit()
+
+        return {
+            "success": True,
+            "message": "重试任务已提交",
+            "action": "retry",
+            "original_history_id": str(generation.id),
+            "history_id": str(retry_generation.id),
+            "task_id": task_id,
+            "status": retry_generation.status,
+            "canvas_id": str(document.id),
+            "canvas_item_id": str(item.id),
+        }
+
+    async def refresh_history_item(self, history_id: str, user_id: str, *, resume: bool = False) -> Dict[str, Any]:
+        generation, item, document = await self._load_generation_for_action(history_id, user_id)
+        if generation.generation_type != CanvasGenerationType.VIDEO.value or item.item_type != CanvasItemType.VIDEO.value:
+            raise BusinessLogicError("只有视频任务支持刷新状态 / 继续同步")
+
+        result_payload = generation.result_payload_json or {}
+        provider_task_id = self._provider_task_id_from_payload(result_payload, generation.id)
+        if not provider_task_id:
+            raise BusinessLogicError("该任务没有 provider_task_id，无法刷新上游状态")
+
+        generation_service = CanvasGenerationService(self.db_session)
+        before_object_key = str(result_payload.get("result_video_object_key") or "").strip()
+        result = await generation_service.get_video_task_status(
+            str(document.id),
+            str(item.id),
+            str(generation.id),
+            user_id,
+        )
+        after_object_key = str(result.get("result_video_object_key") or "").strip()
+        status = self._normalize_status(result.get("status"))
+
+        if resume and after_object_key:
+            message = "结果已同步到 Canvas"
+        elif after_object_key and after_object_key != before_object_key:
+            message = "上游已完成，视频已拉回并回写 Canvas"
+        elif status == CanvasRunStatus.COMPLETED.value and after_object_key:
+            message = "任务已完成，Canvas 已有结果"
+        elif status == CanvasRunStatus.FAILED.value:
+            message = result.get("error_message") or "上游返回失败状态"
+        else:
+            message = "任务仍在处理中，请稍后再刷新"
+
+        detail = await self.get_history_detail(history_id, user_id)
+        return {
+            "success": True,
+            "message": message,
+            "action": "resume" if resume else "refresh",
+            "history_id": str(generation.id),
+            "provider_task_id": provider_task_id,
+            "status": status,
+            "result_video_object_key": after_object_key or None,
+            "canvas_id": str(document.id),
+            "canvas_item_id": str(item.id),
+            "task": detail,
+        }
 
 
 class CanvasGenerationService(BaseService):

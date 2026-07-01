@@ -83,13 +83,27 @@ async def retry_task_history_item(
     db: AsyncSession = Depends(get_db),
 ):
     service = CanvasTaskHistoryService(db)
-    detail: dict[str, Any] = await service.get_history_detail(history_id, str(current_user.id))
-    return {
-        "success": False,
-        "message": "当前阶段不做复杂重试调度，请回到对应 Canvas 节点重新生成。",
-        "canvas_id": detail.get("canvas_id"),
-        "canvas_item_id": detail.get("canvas_item_id"),
-    }
+    return await service.retry_history_item(history_id, str(current_user.id))
+
+
+@router.post("/history/{history_id}/refresh")
+async def refresh_task_history_item(
+    history_id: str,
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    service = CanvasTaskHistoryService(db)
+    return await service.refresh_history_item(history_id, str(current_user.id))
+
+
+@router.post("/history/{history_id}/resume")
+async def resume_task_history_item(
+    history_id: str,
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    service = CanvasTaskHistoryService(db)
+    return await service.refresh_history_item(history_id, str(current_user.id), resume=True)
 
 
 @router.get("/{task_id}", response_model=TaskStatusResponse)

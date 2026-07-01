@@ -107,12 +107,31 @@
               复制 URL
             </el-button>
             <el-button
-              v-if="task.status === 'failed'"
+              v-if="task.can_retry === true"
               size="small"
               type="warning"
+              :loading="actionLoading[task.id] === 'retry'"
               @click="retryTask(task)"
             >
-              回到节点重试
+              重试
+            </el-button>
+            <el-button
+              v-if="canRefreshTask(task)"
+              size="small"
+              :loading="actionLoading[task.id] === 'refresh'"
+              @click="refreshTask(task)"
+            >
+              刷新状态
+            </el-button>
+            <el-button
+              v-if="canResumeTask(task)"
+              size="small"
+              type="primary"
+              plain
+              :loading="actionLoading[task.id] === 'resume'"
+              @click="resumeTask(task)"
+            >
+              继续同步
             </el-button>
           </div>
         </div>
@@ -139,6 +158,7 @@ const total = ref(0)
 const loading = ref(false)
 const detailVisible = ref(false)
 const selectedDetail = ref(null)
+const actionLoading = reactive({})
 
 const filters = reactive({
   type: String(route.query.type || ''),
@@ -249,6 +269,19 @@ const formatTaskParams = (task) => {
   return parts.join(' / ')
 }
 
+const hasProviderTaskId = (task) =>
+  Boolean(task?.provider_task_id || task?.result_payload?.provider_task_id)
+
+const canRefreshTask = (task) => {
+  if (task?.can_refresh_status === true) return true
+  return task?.type === 'video' && hasProviderTaskId(task) && ['failed', 'processing', 'pending'].includes(task?.status)
+}
+
+const canResumeTask = (task) => {
+  if (task?.can_resume_sync === true) return true
+  return task?.type === 'video' && hasProviderTaskId(task) && !task?.object_key
+}
+
 const openDetail = async (task) => {
   selectedDetail.value = await taskHistoryService.detail(task.id)
   detailVisible.value = true
@@ -294,9 +327,32 @@ const copyTaskUrl = async (task) => {
   }
 }
 
-const retryTask = (task) => {
-  ElMessage.info('当前阶段请回到对应 Canvas 节点重新生成')
-  jumpToCanvas(task)
+const runTaskAction = async (task, action, runner) => {
+  actionLoading[task.id] = action
+  try {
+    const response = await runner(task.id)
+    ElMessage.success(response?.message || '操作已提交')
+    await loadTasks()
+    return response
+  } catch (error) {
+    const message = error?.response?.data?.detail || error?.response?.data?.message || error?.message || '操作失败'
+    ElMessage.error(message)
+    return null
+  } finally {
+    delete actionLoading[task.id]
+  }
+}
+
+const retryTask = async (task) => {
+  await runTaskAction(task, 'retry', taskHistoryService.retry)
+}
+
+const refreshTask = async (task) => {
+  await runTaskAction(task, 'refresh', taskHistoryService.refresh)
+}
+
+const resumeTask = async (task) => {
+  await runTaskAction(task, 'resume', taskHistoryService.resume)
 }
 
 watch(
