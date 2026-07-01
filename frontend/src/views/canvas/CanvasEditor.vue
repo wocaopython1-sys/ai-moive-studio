@@ -169,6 +169,17 @@
         批量生成图片
       </button>
 
+      <button
+        v-if="batchVideoItems.length"
+        class="canvas-batch-launcher canvas-batch-launcher--video"
+        type="button"
+        data-testid="open-batch-video-panel"
+        :disabled="batchVideoGenerating"
+        @click="openBatchVideoPanel"
+      >
+        批量生成视频
+      </button>
+
       <aside
         v-if="batchImagePanelVisible"
         class="canvas-batch-panel"
@@ -280,6 +291,132 @@
             @click="runBatchImageGeneration"
           >
             {{ batchImageGenerating ? '生成中' : '批量生成图片' }}
+          </button>
+        </div>
+      </aside>
+
+      <aside
+        v-if="batchVideoPanelVisible"
+        class="canvas-batch-panel canvas-batch-panel--video"
+        data-testid="batch-video-panel"
+      >
+        <header class="canvas-batch-panel__header">
+          <div>
+            <h3>批量生成视频</h3>
+            <p>{{ selectedBatchVideoItems.length }} / {{ batchVideoItems.length }} 个图片</p>
+          </div>
+          <button
+            class="canvas-batch-panel__close"
+            type="button"
+            aria-label="关闭批量生成视频"
+            :disabled="batchVideoGenerating"
+            @click="batchVideoPanelVisible = false"
+          >
+            ×
+          </button>
+        </header>
+
+        <div v-if="!batchVideoItems.length" class="canvas-batch-panel__state">
+          当前 Canvas 没有可用图片节点
+        </div>
+        <div v-else class="canvas-batch-panel__body">
+          <label
+            v-for="item in batchVideoItems"
+            :key="item.id"
+            class="canvas-batch-prompt"
+            :class="{ 'is-disabled': !isBatchVideoImageReady(item) }"
+          >
+            <input
+              type="checkbox"
+              :checked="batchSelectedImageIds.includes(item.id)"
+              :disabled="batchVideoGenerating || !isBatchVideoImageReady(item)"
+              @change="toggleBatchVideoImage(item.id)"
+            />
+            <span>
+              <strong>{{ batchVideoImageTitle(item) }}</strong>
+              <small>{{ batchVideoImagePreview(item) }}</small>
+            </span>
+            <em v-if="batchVideoStatusBySource[item.id]">
+              {{ batchStatusText(batchVideoStatusBySource[item.id]) }}
+            </em>
+            <em v-else-if="!isBatchVideoImageReady(item)">不可用</em>
+          </label>
+        </div>
+
+        <div class="canvas-batch-panel__options canvas-batch-panel__options--video">
+          <label class="canvas-batch-panel__option--wide">
+            Prompt
+            <textarea
+              v-model="batchVideoSettings.prompt"
+              :disabled="batchVideoGenerating"
+              rows="2"
+              placeholder="输入统一视频 Prompt"
+            />
+          </label>
+          <label>
+            模型
+            <select
+              v-model="batchVideoSettings.model"
+              :disabled="batchVideoGenerating"
+            >
+              <option
+                v-for="model in videoModelOptions"
+                :key="model"
+                :value="model"
+              >
+                {{ model }}
+              </option>
+            </select>
+          </label>
+          <label>
+            比例
+            <select
+              v-model="batchVideoSettings.aspectRatio"
+              :disabled="batchVideoGenerating"
+            >
+              <option
+                v-for="ratio in batchVideoAspectRatioOptions"
+                :key="ratio"
+                :value="ratio"
+              >
+                {{ ratio }}
+              </option>
+            </select>
+          </label>
+          <label>
+            时长
+            <select
+              v-model.number="batchVideoSettings.durationSeconds"
+              :disabled="batchVideoGenerating"
+            >
+              <option
+                v-for="duration in videoDurationOptions"
+                :key="duration"
+                :value="duration"
+              >
+                {{ duration }}s
+              </option>
+            </select>
+          </label>
+        </div>
+
+        <div class="canvas-batch-panel__actions">
+          <button
+            class="canvas-batch-btn"
+            type="button"
+            :disabled="batchVideoGenerating"
+            @click="selectCurrentImageNodesForBatchVideo"
+          >
+            选中图片
+          </button>
+          <button
+            class="canvas-batch-btn canvas-batch-btn--primary"
+            type="button"
+            data-testid="batch-generate-videos"
+            :disabled="!selectedBatchVideoItems.length || batchVideoGenerating"
+            @click="runBatchVideoGeneration"
+          >
+            {{ batchVideoGenerating ? '入队中' : '生成视频队列' }}
           </button>
         </div>
       </aside>
@@ -586,6 +723,16 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     model: '',
     imageSize: DEFAULT_IMAGE_SIZE,
     imageCount: DEFAULT_IMAGE_COUNT
+  })
+  const batchVideoPanelVisible = ref(false)
+  const batchVideoGenerating = ref(false)
+  const batchSelectedImageIds = ref([])
+  const batchVideoStatusBySource = reactive({})
+  const batchVideoSettings = reactive({
+    prompt: '镜头缓慢推进，画面轻微动态，保持主体一致。',
+    model: '',
+    aspectRatio: DEFAULT_ASPECT_RATIO,
+    durationSeconds: DEFAULT_VIDEO_DURATION_SECONDS
   })
   const handledEntryModeKeys = new Set()
 
@@ -952,12 +1099,24 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       selectedItem.value?.generation_config?.model || ''
     )
   )
+  const batchVideoAspectRatioOptions = computed(() =>
+    getSupportedVideoAspectRatios(
+      batchVideoSettings.model || defaultVideoModel.value || ''
+    )
+  )
   const batchPromptItems = computed(() =>
     items.value.filter((item) => item.item_type === 'text')
   )
   const selectedBatchPromptItems = computed(() => {
     const selectedIdSet = new Set(batchSelectedPromptIds.value)
     return batchPromptItems.value.filter((item) => selectedIdSet.has(item.id))
+  })
+  const batchVideoItems = computed(() =>
+    items.value.filter((item) => item.item_type === 'image')
+  )
+  const selectedBatchVideoItems = computed(() => {
+    const selectedIdSet = new Set(batchSelectedImageIds.value)
+    return batchVideoItems.value.filter((item) => selectedIdSet.has(item.id))
   })
 
   const buildDefaultGenerationConfig = (type) => {
@@ -1073,6 +1232,74 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       selectCurrentTextNodesForBatch()
     }
     batchImagePanelVisible.value = true
+  }
+
+  const isBatchVideoImageReady = (item) =>
+    Boolean(
+      resolveImageReferenceObjectKey(item?.content) ||
+        resolveImagePreviewUrl(
+          item?.content,
+          imageUploadPreviewMap.value[item?.id] || ''
+        )
+    )
+
+  const batchVideoImageTitle = (item) =>
+    String(item?.title || '').trim() || '图片节点'
+
+  const batchVideoImagePreview = (item) => {
+    const objectKey = resolveImageReferenceObjectKey(item?.content)
+    if (objectKey) return objectKey.split('/').pop() || objectKey
+    const previewUrl = resolveImagePreviewUrl(
+      item?.content,
+      imageUploadPreviewMap.value[item?.id] || ''
+    )
+    if (previewUrl) return '已绑定图片 URL'
+    if (item?.last_run_status === 'failed') {
+      return item?.last_run_error || '图片生成失败'
+    }
+    return '暂无图片结果'
+  }
+
+  const toggleBatchVideoImage = (itemId) => {
+    const item = items.value.find((entry) => entry.id === itemId)
+    if (!isBatchVideoImageReady(item)) {
+      ElMessage.warning('该图片节点没有可用图片结果')
+      return
+    }
+    const selected = new Set(batchSelectedImageIds.value)
+    if (selected.has(itemId)) {
+      selected.delete(itemId)
+    } else {
+      if (selected.size >= 3) {
+        ElMessage.warning('一次最多选择 3 张图片进入视频队列')
+        return
+      }
+      selected.add(itemId)
+    }
+    batchSelectedImageIds.value = [...selected]
+  }
+
+  const selectCurrentImageNodesForBatchVideo = () => {
+    const selectedImageIds = (selectedItemIds.value || []).filter((itemId) =>
+      items.value.some(
+        (item) => item.id === itemId && item.item_type === 'image' && isBatchVideoImageReady(item)
+      )
+    )
+    const fallbackImageIds = batchVideoItems.value
+      .filter(isBatchVideoImageReady)
+      .slice(0, 2)
+      .map((item) => item.id)
+    batchSelectedImageIds.value = (selectedImageIds.length
+      ? selectedImageIds
+      : fallbackImageIds
+    ).slice(0, 3)
+  }
+
+  const openBatchVideoPanel = () => {
+    if (!batchSelectedImageIds.value.length) {
+      selectCurrentImageNodesForBatchVideo()
+    }
+    batchVideoPanelVisible.value = true
   }
 
   const relationNodeLabel = (item) => {
@@ -1508,6 +1735,143 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       }
     } finally {
       batchImageGenerating.value = false
+    }
+  }
+
+  const buildBatchVideoPayload = (videoNode, source, batchId, index, total) => {
+    const payload = buildGenerationPayload(videoNode)
+    payload.options = {
+      ...(payload.options || {}),
+      batch_id: batchId,
+      batch_index: index + 1,
+      batch_total: total,
+      batch_label: '分镜视频',
+      source_item_id: source.id,
+      source_image_item_id: source.id
+    }
+    return payload
+  }
+
+  const runBatchVideoGeneration = async () => {
+    const sources = selectedBatchVideoItems.value
+    if (!sources.length || batchVideoGenerating.value) return
+    if (sources.length > 3) {
+      ElMessage.warning('一次最多选择 3 张图片进入视频队列')
+      return
+    }
+    const prompt = String(batchVideoSettings.prompt || '').trim()
+    if (!prompt) {
+      ElMessage.warning('请输入视频 Prompt')
+      return
+    }
+    if (!batchVideoSettings.model && !defaultVideoModel.value) {
+      ElMessage.warning('没有可用视频模型')
+      return
+    }
+    const runnableSources = sources.filter(isBatchVideoImageReady)
+    if (!runnableSources.length) {
+      ElMessage.warning('请选择已生成图片的 ImageNode')
+      return
+    }
+
+    batchVideoGenerating.value = true
+    const batchId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `video-batch-${Date.now()}`
+    let completed = 0
+    const failed = []
+    const completedVideoItemIds = []
+    const model = batchVideoSettings.model || defaultVideoModel.value
+    const aspectRatio = normalizeVideoAspectRatio(
+      model,
+      batchVideoSettings.aspectRatio || DEFAULT_ASPECT_RATIO
+    )
+    const durationSeconds = Number(
+      batchVideoSettings.durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS
+    )
+
+    try {
+      syncSelectedStudioDraft()
+      if (dirty.value) {
+        await save()
+      }
+
+      for (const [index, source] of runnableSources.entries()) {
+        batchVideoStatusBySource[source.id] = 'running'
+        try {
+          const videoNode = await createLinkedNodeFromItem(source, 'video', {
+            title: `批量视频 ${index + 1}`,
+            position_x: source.position_x + source.width + 160,
+            position_y: source.position_y + index * 36,
+            content: {
+              prompt,
+              promptTokens: [
+                buildMentionTokenForItem(source),
+                { type: 'text', text: ` ${prompt}` }
+              ],
+              batch_id: batchId,
+              batch_index: index + 1,
+              batch_total: runnableSources.length,
+              batch_label: '分镜视频',
+              source_image_item_id: source.id
+            },
+            generation_config: {
+              api_key_id: defaultVideoApiKeyId.value,
+              model,
+              aspectRatio,
+              durationSeconds
+            }
+          })
+          if (!videoNode?.id) {
+            throw new Error('视频节点创建失败')
+          }
+
+          const response = await generate(
+            videoNode,
+            buildBatchVideoPayload(videoNode, source, batchId, index, runnableSources.length)
+          )
+          if (response?.item?.id) {
+            updateItem(response.item.id, {
+              content: response.item.content,
+              generation_config: response.item.generation_config,
+              last_run_status: response.item.last_run_status,
+              last_run_error: response.item.last_run_error,
+              last_output: response.item.last_output,
+              is_persisted: true
+            })
+            await mergeCreatedItemsFromGeneration(response)
+            await loadHistory(response.item.id)
+            completedVideoItemIds.push(response.item.id)
+          }
+          batchVideoStatusBySource[source.id] = 'completed'
+          completed += 1
+        } catch (error) {
+          batchVideoStatusBySource[source.id] = 'failed'
+          failed.push({
+            item: source,
+            message:
+              error?.response?.data?.detail ||
+              error?.message ||
+              '视频生成失败'
+          })
+        }
+      }
+
+      await save()
+      const firstResult = items.value.find(
+        (item) => item.id === completedVideoItemIds[0]
+      )
+      if (firstResult) {
+        await focusCanvasItem(firstResult)
+      }
+      if (failed.length) {
+        ElMessage.warning(`视频队列完成 ${completed} / ${runnableSources.length}，失败 ${failed.length} 项`)
+      } else {
+        ElMessage.success(`视频队列完成 ${completed} / ${runnableSources.length}`)
+      }
+    } finally {
+      batchVideoGenerating.value = false
     }
   }
 
@@ -3097,6 +3461,26 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     }
   }, { immediate: true })
 
+  watch(defaultVideoModel, (model) => {
+    if (!batchVideoSettings.model && model) {
+      batchVideoSettings.model = model
+    }
+  }, { immediate: true })
+
+  watch(
+    () => batchVideoSettings.model,
+    (model) => {
+      const normalized = normalizeVideoAspectRatio(
+        model || defaultVideoModel.value || '',
+        batchVideoSettings.aspectRatio || DEFAULT_ASPECT_RATIO
+      )
+      if (batchVideoSettings.aspectRatio !== normalized) {
+        batchVideoSettings.aspectRatio = normalized
+      }
+    },
+    { immediate: true }
+  )
+
   watch(
     () => route.params.canvasId,
     async (canvasId) => {
@@ -3261,6 +3645,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     opacity: 0.65;
   }
 
+  .canvas-batch-launcher--video {
+    left: 218px;
+  }
+
   .canvas-batch-panel {
     position: absolute;
     left: 88px;
@@ -3275,6 +3663,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     border-radius: 16px;
     background: rgba(255, 255, 255, 0.98);
     box-shadow: 0 18px 42px rgba(24, 42, 80, 0.18);
+  }
+
+  .canvas-batch-panel--video {
+    left: 218px;
   }
 
   .canvas-batch-panel__header {
@@ -3367,6 +3759,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     font-weight: 700;
   }
 
+  .canvas-batch-prompt.is-disabled {
+    opacity: 0.55;
+  }
+
   .canvas-batch-panel__options {
     display: grid;
     grid-template-columns: 1fr 1fr auto;
@@ -3385,13 +3781,30 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     font-weight: 700;
   }
 
-  .canvas-batch-panel__options select {
+  .canvas-batch-panel__options--video {
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 86px 74px;
+  }
+
+  .canvas-batch-panel__option--wide {
+    min-width: 0;
+  }
+
+  .canvas-batch-panel__options select,
+  .canvas-batch-panel__options textarea {
     min-width: 0;
     height: 32px;
     border: 1px solid rgba(31, 49, 88, 0.16);
     border-radius: 8px;
     background: #fff;
     color: #253653;
+  }
+
+  .canvas-batch-panel__options textarea {
+    height: 54px;
+    padding: 6px 8px;
+    resize: vertical;
+    font: inherit;
+    line-height: 1.35;
   }
 
   .canvas-batch-panel__actions {
