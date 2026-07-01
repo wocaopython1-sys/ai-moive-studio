@@ -72,6 +72,7 @@
             <span v-if="task.provider">Provider：{{ task.provider }}</span>
             <span v-if="task.model">模型：{{ task.model }}</span>
             <span v-if="formatTaskParams(task)">参数：{{ formatTaskParams(task) }}</span>
+            <span v-if="task.result_summary">结果：{{ task.result_summary }}</span>
             <span>{{ formatTime(task.updated_at || task.created_at) }}</span>
           </p>
           <p v-if="task.error_message" class="task-error">

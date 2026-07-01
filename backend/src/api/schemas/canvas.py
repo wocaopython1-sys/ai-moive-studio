@@ -167,6 +167,8 @@ class CanvasGenerateResultResponse(SuccessResponse):
     status: str
     item: CanvasItemPayload
     generation: CanvasGenerationResponse
+    created_items: List[CanvasItemPayload] = Field(default_factory=list)
+    created_connections: List[CanvasConnectionPayload] = Field(default_factory=list)
 
 
 class CanvasApplyGenerationResponse(SuccessResponse):

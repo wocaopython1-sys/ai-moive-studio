@@ -2,7 +2,7 @@ import { buildPromptDerivatives } from '@/utils/promptMentionTokens'
 
 export const IMAGE_ASPECT_RATIO_OPTIONS = ['1:1', '3:4', '4:3', '16:9', '9:16']
 export const IMAGE_SIZE_OPTIONS = ['1024x1024', '1024x1536', '1536x1024']
-export const IMAGE_COUNT_OPTIONS = [1, 2, 3, 4]
+export const IMAGE_COUNT_OPTIONS = [1, 2, 4]
 export const VIDEO_ASPECT_RATIO_OPTIONS = ['16:9', '9:16', '1:1']
 export const VIDEO_DURATION_OPTIONS = [5, 10]
 export const DEFAULT_ASPECT_RATIO = '16:9'

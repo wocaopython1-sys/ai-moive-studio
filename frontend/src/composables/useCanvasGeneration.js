@@ -208,7 +208,9 @@ export function useCanvasGeneration(updateItem, getItemById = () => null) {
       return {
         message: '文本生成完成',
         item: finalEvent.item,
-        generation: finalEvent.generation
+        generation: finalEvent.generation,
+        created_items: finalEvent.created_items || [],
+        created_connections: finalEvent.created_connections || []
       }
     } catch (error) {
       if (error?.name !== 'AbortError') {
@@ -318,7 +320,9 @@ export function useCanvasGeneration(updateItem, getItemById = () => null) {
       return {
         message: `${item.item_type === 'image' ? '图片' : '视频'}生成完成`,
         item: finalEvent.item,
-        generation: finalEvent.generation
+        generation: finalEvent.generation,
+        created_items: finalEvent.created_items || [],
+        created_connections: finalEvent.created_connections || []
       }
     } catch (error) {
       if (error?.name !== 'AbortError') {

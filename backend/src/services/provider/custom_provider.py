@@ -87,15 +87,40 @@ class CustomProvider(BaseLLMProvider):
             openai_kwargs = dict(kwargs)
             if "size" not in openai_kwargs and openai_kwargs.get("image_size"):
                 openai_kwargs["size"] = openai_kwargs.get("image_size")
+            requested_count = 1
             if "n" in openai_kwargs:
                 try:
-                    openai_kwargs["n"] = max(1, min(int(openai_kwargs["n"]), 4))
+                    requested_count = max(1, min(int(openai_kwargs["n"]), 4))
                 except (TypeError, ValueError):
+                    requested_count = 1
                     openai_kwargs.pop("n", None)
             for unsupported_key in ("aspect_ratio", "image_size", "reference_images"):
                 openai_kwargs.pop(unsupported_key, None)
+
+            image_model = model or "Kwai-Kolors/Kolors"
+            if requested_count > 1:
+                # Some OpenAI-compatible gateways map gpt-image requests to a
+                # responses image tool and reject tools[0].n. Keep AICON's n
+                # behavior by fan-out with single-image requests and aggregate.
+                openai_kwargs.pop("n", None)
+                results = []
+                for _ in range(requested_count):
+                    response = await self.client.images.generate(
+                        model=image_model, prompt=prompt, **openai_kwargs
+                    )
+                    data = getattr(response, "data", None)
+                    if isinstance(data, list):
+                        results.extend(data)
+                    elif data:
+                        results.append(data)
+                    else:
+                        results.append(response)
+                return results
+
+            if requested_count == 1:
+                openai_kwargs["n"] = 1
             return await self.client.images.generate(
-                model=model or "Kwai-Kolors/Kolors", prompt=prompt, **openai_kwargs
+                model=image_model, prompt=prompt, **openai_kwargs
             )
 
     @log_provider_call("generate_audio")

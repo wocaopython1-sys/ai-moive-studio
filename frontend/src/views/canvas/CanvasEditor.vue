@@ -498,6 +498,7 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     clearSelection,
     startConnection,
     completeConnection,
+    mergeConnections,
     removeConnection,
     updateViewport
   } = useCanvasEditor()
@@ -1128,6 +1129,38 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     return items.value.find((item) => item.id === itemId) || selectedItem.value || null
   }
 
+  const mergeCreatedItemsFromGeneration = async (response = {}) => {
+    const createdConnections = Array.isArray(response?.created_connections)
+      ? response.created_connections
+      : []
+    mergeConnections(createdConnections)
+    const createdItems = Array.isArray(response?.created_items)
+      ? response.created_items
+      : []
+    createdItems.forEach((createdItem) => {
+      if (!createdItem?.id || createdItem.id === response?.item?.id) return
+      const exists = items.value.some((item) => item.id === createdItem.id)
+      if (exists) {
+        updateItem(createdItem.id, {
+          content: createdItem.content,
+          generation_config: createdItem.generation_config,
+          last_run_status: createdItem.last_run_status,
+          last_run_error: createdItem.last_run_error,
+          last_output: createdItem.last_output,
+          is_persisted: true
+        })
+        return
+      }
+      items.value.push({
+        ...createdItem,
+        content: createdItem.content || {},
+        generation_config: createdItem.generation_config || {},
+        last_output: createdItem.last_output || {},
+        is_persisted: true
+      })
+    })
+  }
+
   const runGenerationForItem = async (targetItem, successMessage = '生成完成') => {
     if (!targetItem?.id) {
       throw new Error('目标节点不存在')
@@ -1149,12 +1182,14 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       const refreshedItem =
         items.value.find((item) => item.id === response.item.id) ||
         response.item
+      await mergeCreatedItemsFromGeneration(response)
       await focusCanvasItem(refreshedItem)
       await Promise.resolve()
       await setSelectionWithDraftSync(refreshedItem.id)
     }
     await save()
-    ElMessage.success(response?.message || successMessage)
+    const resultCount = Number(response?.generation?.result_payload?.result_count || 0)
+    ElMessage.success(resultCount > 1 ? `已生成 ${resultCount} 张图片` : response?.message || successMessage)
     return {
       ...response,
       item:
@@ -2550,6 +2585,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
           last_output: response.item.last_output,
           is_persisted: true
         })
+        await mergeCreatedItemsFromGeneration(response)
+        const refreshedItem =
+          items.value.find((item) => item.id === response.item.id) || response.item
+        await focusCanvasItem(refreshedItem)
       }
     } catch (error) {
       ElMessage.error(

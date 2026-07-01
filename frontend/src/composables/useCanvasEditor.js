@@ -402,6 +402,39 @@ export function useCanvasEditor() {
     pendingConnection.value = null
   }
 
+  const mergeConnections = (incomingConnections = []) => {
+    const normalizedIncoming = (incomingConnections || [])
+      .filter(Boolean)
+      .map(normalizeConnection)
+    if (!normalizedIncoming.length) return
+    const existingKeys = new Set(
+      connections.value.map((connection) =>
+        [
+          connection.id,
+          connection.source_item_id,
+          connection.target_item_id,
+          connection.source_handle,
+          connection.target_handle
+        ].join(':')
+      )
+    )
+    const additions = normalizedIncoming.filter((connection) => {
+      const key = [
+        connection.id,
+        connection.source_item_id,
+        connection.target_item_id,
+        connection.source_handle,
+        connection.target_handle
+      ].join(':')
+      if (existingKeys.has(key)) return false
+      existingKeys.add(key)
+      return true
+    })
+    if (additions.length) {
+      connections.value = [...connections.value, ...additions]
+    }
+  }
+
   const removeConnection = async (connectionId) => {
     if (!currentDocumentId) return
     await canvasService.deleteConnection(currentDocumentId, connectionId)
@@ -445,6 +478,7 @@ export function useCanvasEditor() {
     clearSelection,
     startConnection,
     completeConnection,
+    mergeConnections,
     removeConnection,
     updateViewport
   }

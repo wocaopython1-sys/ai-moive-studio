@@ -718,6 +718,22 @@ class CanvasTaskHistoryService(BaseService):
             summary["reference_images"] = len(options.get("reference_image_object_keys") or [])
         return summary
 
+    def _result_count_from_payload(self, result_payload: Dict[str, Any]) -> int:
+        images = result_payload.get("result_images") if isinstance(result_payload, dict) else None
+        if isinstance(images, list):
+            return len([entry for entry in images if isinstance(entry, dict) and entry.get("object_key")])
+        if isinstance(result_payload, dict) and result_payload.get("result_image_object_key"):
+            return 1
+        return 0
+
+    def _result_summary_from_payload(self, result_payload: Dict[str, Any]) -> str:
+        result_count = self._result_count_from_payload(result_payload)
+        if result_count > 1:
+            return f"生成 {result_count} 张图片"
+        if result_count == 1:
+            return "生成 1 张图片"
+        return ""
+
     def _generation_to_history_item(self, generation: CanvasItemGeneration, item: CanvasItem, document: CanvasDocument) -> Dict[str, Any]:
         request_payload = generation.request_payload_json or {}
         result_payload = generation.result_payload_json or {}
@@ -749,6 +765,8 @@ class CanvasTaskHistoryService(BaseService):
             "provider": self._provider_from_payloads(request_payload, result_payload),
             "model": self._model_from_payloads(request_payload, item),
             "params": self._params_summary_from_payloads(request_payload),
+            "result_count": self._result_count_from_payload(result_payload),
+            "result_summary": self._result_summary_from_payload(result_payload),
             "created_at": generation.created_at.isoformat() if generation.created_at else "",
             "updated_at": generation.updated_at.isoformat() if generation.updated_at else "",
             "request_payload": request_payload,
@@ -1205,20 +1223,51 @@ class CanvasGenerationService(BaseService):
                 model=request.get("model"),
                 **image_kwargs,
             )
-            image_asset = await self._resolve_image_result(response, str(generation.user_id))
+            image_assets = await self._resolve_image_results(response, str(generation.user_id))
+            batch_id = str(uuid.uuid4())
+            result_images = [
+                {
+                    "object_key": asset.get("object_key"),
+                    "index": index + 1,
+                    "batch_id": batch_id,
+                }
+                for index, asset in enumerate(image_assets)
+                if asset.get("object_key")
+            ]
+            if not result_images:
+                raise BusinessLogicError("No usable image found in generation result")
+            created_items, created_connections = await self._create_batch_image_items(
+                canvas_service,
+                item,
+                result_images,
+                request,
+                str(generation.user_id),
+            )
             await canvas_service.update_generation(
                 generation,
                 item,
                 CanvasRunStatus.COMPLETED.value,
                 result_payload={
-                    "result_image_object_key": image_asset.get("object_key"),
+                    "result_image_object_key": result_images[0].get("object_key"),
+                    "result_images": result_images,
+                    "result_count": len(result_images),
+                    "batch_id": batch_id,
                     "provider": api_key.provider,
                     "model": request.get("model"),
                     "options": request.get("options") or {},
+                    "created_item_ids": [str(created.id) for created in created_items],
+                    "created_connection_ids": [str(created.id) for created in created_connections],
                 },
             )
             await self.commit()
-            return {"generation_id": generation_id, "status": CanvasRunStatus.COMPLETED.value, "result_image_object_key": image_asset.get("object_key")}
+            return {
+                "generation_id": generation_id,
+                "status": CanvasRunStatus.COMPLETED.value,
+                "result_image_object_key": result_images[0].get("object_key"),
+                "result_images": result_images,
+                "created_item_ids": [str(created.id) for created in created_items],
+                "created_connection_ids": [str(created.id) for created in created_connections],
+            }
         except Exception as exc:
             await canvas_service.update_generation(
                 generation,
@@ -2073,12 +2122,54 @@ class CanvasGenerationService(BaseService):
 
         if result_payload.get("result_image_object_key"):
             payload["result_image_object_key"] = result_payload["result_image_object_key"]
+        if result_payload.get("result_images"):
+            payload["result_images"] = result_payload["result_images"]
+            payload["result_count"] = result_payload.get("result_count") or len(result_payload.get("result_images") or [])
+        if result_payload.get("created_item_ids"):
+            created_items = await self._load_items_by_ids(result_payload.get("created_item_ids") or [])
+            payload["created_items"] = [
+                await self._serialize_item_for_response(created_item)
+                for created_item in created_items
+            ]
+        if result_payload.get("created_connection_ids"):
+            created_connections = await self._load_connections_by_ids(result_payload.get("created_connection_ids") or [])
+            payload["created_connections"] = [
+                self._serialize_connection_for_response(created_connection)
+                for created_connection in created_connections
+            ]
         if result_payload.get("result_video_object_key"):
             payload["result_video_object_key"] = result_payload["result_video_object_key"]
         if result_payload.get("text"):
             payload["text"] = result_payload["text"]
 
         return await self._resolve_media_urls_in_mapping(payload)
+
+    async def _load_items_by_ids(self, item_ids: List[str]) -> List[CanvasItem]:
+        normalized_ids = [ensure_canvas_uuid(item_id) for item_id in item_ids if str(item_id or "").strip()]
+        if not normalized_ids:
+            return []
+        stmt = select(CanvasItem).where(CanvasItem.id.in_(normalized_ids))
+        rows = list((await self.execute(stmt)).scalars().all())
+        by_id = {str(row.id): row for row in rows}
+        return [by_id[str(item_id)] for item_id in normalized_ids if str(item_id) in by_id]
+
+    async def _load_connections_by_ids(self, connection_ids: List[str]) -> List[CanvasConnection]:
+        normalized_ids = [ensure_canvas_uuid(connection_id) for connection_id in connection_ids if str(connection_id or "").strip()]
+        if not normalized_ids:
+            return []
+        stmt = select(CanvasConnection).where(CanvasConnection.id.in_(normalized_ids))
+        rows = list((await self.execute(stmt)).scalars().all())
+        by_id = {str(row.id): row for row in rows}
+        return [by_id[str(connection_id)] for connection_id in normalized_ids if str(connection_id) in by_id]
+
+    def _serialize_connection_for_response(self, connection: CanvasConnection) -> Dict[str, Any]:
+        return {
+            "id": str(connection.id),
+            "source_item_id": str(connection.source_item_id),
+            "target_item_id": str(connection.target_item_id),
+            "source_handle": connection.source_handle,
+            "target_handle": connection.target_handle,
+        }
 
     def _encode_sse_event(self, event_name: str, payload: Dict[str, Any]) -> str:
         return f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
@@ -2107,10 +2198,110 @@ class CanvasGenerationService(BaseService):
             object_key = str(resolved.get(object_key_field) or "").strip()
             if object_key:
                 resolved[url_field] = media_url_for_object_key(object_key)
+        if isinstance(resolved.get("result_images"), list):
+            resolved["result_images"] = [
+                {
+                    **entry,
+                    "preview_url": media_url_for_object_key(entry.get("object_key"), "preview"),
+                    "download_url": media_url_for_object_key(entry.get("object_key"), "download"),
+                }
+                if isinstance(entry, dict) and entry.get("object_key")
+                else entry
+                for entry in resolved["result_images"]
+            ]
         return resolved
+
+    async def _create_batch_image_items(
+        self,
+        canvas_service: CanvasService,
+        source_item: CanvasItem,
+        result_images: List[Dict[str, Any]],
+        request: Dict[str, Any],
+        user_id: str,
+    ) -> Tuple[List[CanvasItem], List[CanvasConnection]]:
+        created_items = [source_item]
+        created_connections: List[CanvasConnection] = []
+        if len(result_images) <= 1:
+            return created_items, created_connections
+
+        source_connection_stmt = select(CanvasConnection).where(
+            CanvasConnection.document_id == source_item.document_id,
+            CanvasConnection.target_item_id == source_item.id,
+        ).order_by(CanvasConnection.created_at)
+        source_connection = (await self.execute(source_connection_stmt)).scalars().first()
+        relation_source_id = source_connection.source_item_id if source_connection else None
+        base_x = float(source_item.position_x or 0)
+        base_y = float(source_item.position_y or 0)
+        width = float(source_item.width or 360)
+        height = float(source_item.height or 260)
+        gap_x = 56
+        gap_y = 44
+        columns = 2
+
+        for index, image_entry in enumerate(result_images[1:], start=2):
+            offset_index = index - 1
+            column = offset_index % columns
+            row = offset_index // columns
+            object_key = image_entry.get("object_key")
+            item = await canvas_service.create_item(
+                str(source_item.document_id),
+                user_id,
+                {
+                    "item_type": CanvasItemType.IMAGE.value,
+                    "title": f"图片结果 {index}",
+                    "position_x": base_x + column * (width + gap_x),
+                    "position_y": base_y + row * (height + gap_y),
+                    "width": width,
+                    "height": height,
+                    "z_index": int(source_item.z_index or 0) + index,
+                    "content": {
+                        "prompt": request.get("prompt") or "",
+                        "promptTokens": request.get("prompt_tokens") or [],
+                        "result_image_object_key": object_key,
+                        "batch_id": image_entry.get("batch_id"),
+                        "batch_index": index,
+                    },
+                    "generation_config": dict(source_item.generation_config_json or {}),
+                    "last_run_status": CanvasRunStatus.COMPLETED.value,
+                    "last_output": {
+                        "result_image_object_key": object_key,
+                        "batch_id": image_entry.get("batch_id"),
+                        "batch_index": index,
+                    },
+                },
+            )
+            created_items.append(item)
+            if relation_source_id:
+                created_connection = await canvas_service.create_connection(
+                    str(source_item.document_id),
+                    user_id,
+                    {
+                        "source_item_id": str(relation_source_id),
+                        "target_item_id": str(item.id),
+                        "source_handle": "right",
+                        "target_handle": "left",
+                    },
+                )
+                created_connections.append(created_connection)
+        return created_items, created_connections
+
+    async def _resolve_image_results(self, response: Any, user_id: str) -> List[Dict[str, Any]]:
+        image_results = self._image_results(response)
+        if not image_results:
+            raise BusinessLogicError("No usable image found in generation result")
+        assets = []
+        for index, image_data in enumerate(image_results, start=1):
+            try:
+                assets.append(await self._store_image_result(image_data, user_id))
+            except Exception as exc:
+                raise BusinessLogicError(f"Image {index} save failed: {exc}") from exc
+        return assets
 
     async def _resolve_image_result(self, response: Any, user_id: str) -> Dict[str, Any]:
         image_data = self._first_image_result(response)
+        return await self._store_image_result(image_data, user_id)
+
+    async def _store_image_result(self, image_data: Any, user_id: str) -> Dict[str, Any]:
         image_url = self._image_result_url(image_data)
         if image_url:
             async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=20.0)) as client:
@@ -2139,6 +2330,34 @@ class CanvasGenerationService(BaseService):
             )
             return {"object_key": storage["object_key"], "url": storage["url"]}
         raise BusinessLogicError("图片生成结果不包含可用图片")
+
+    def _image_results(self, response: Any) -> List[Any]:
+        if isinstance(response, str):
+            stripped = response.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    return self._image_results(json.loads(stripped))
+                except json.JSONDecodeError:
+                    return [stripped]
+            return [stripped]
+        if isinstance(response, list):
+            return response
+        if isinstance(response, dict):
+            data = response.get("data")
+            if isinstance(data, list):
+                return data
+            for key in ("url", "b64_json", "base64", "image", "image_url"):
+                if response.get(key):
+                    return [response]
+            return []
+        data = getattr(response, "data", None)
+        if isinstance(data, list):
+            return data
+        if data:
+            return [data]
+        return [response] if response else []
 
     def _first_image_result(self, response: Any) -> Any:
         if isinstance(response, str):
