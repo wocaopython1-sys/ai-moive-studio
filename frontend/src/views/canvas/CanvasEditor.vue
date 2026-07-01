@@ -158,6 +158,132 @@
         @select="handleHistorySelect"
       />
 
+      <button
+        v-if="batchPromptItems.length"
+        class="canvas-batch-launcher"
+        type="button"
+        data-testid="open-batch-image-panel"
+        :disabled="batchImageGenerating"
+        @click="openBatchImagePanel"
+      >
+        批量生成图片
+      </button>
+
+      <aside
+        v-if="batchImagePanelVisible"
+        class="canvas-batch-panel"
+        data-testid="batch-image-panel"
+      >
+        <header class="canvas-batch-panel__header">
+          <div>
+            <h3>批量生成图片</h3>
+            <p>{{ selectedBatchPromptItems.length }} / {{ batchPromptItems.length }} 个 Prompt</p>
+          </div>
+          <button
+            class="canvas-batch-panel__close"
+            type="button"
+            aria-label="关闭批量生成图片"
+            :disabled="batchImageGenerating"
+            @click="batchImagePanelVisible = false"
+          >
+            ×
+          </button>
+        </header>
+
+        <div v-if="!batchPromptItems.length" class="canvas-batch-panel__state">
+          当前 Canvas 没有可用文本节点
+        </div>
+        <div v-else class="canvas-batch-panel__body">
+          <label
+            v-for="item in batchPromptItems"
+            :key="item.id"
+            class="canvas-batch-prompt"
+          >
+            <input
+              type="checkbox"
+              :checked="batchSelectedPromptIds.includes(item.id)"
+              :disabled="batchImageGenerating"
+              @change="toggleBatchPrompt(item.id)"
+            />
+            <span>
+              <strong>{{ batchPromptTitle(item) }}</strong>
+              <small>{{ batchPromptPreview(item) }}</small>
+            </span>
+            <em v-if="batchStatusBySource[item.id]">
+              {{ batchStatusText(batchStatusBySource[item.id]) }}
+            </em>
+          </label>
+        </div>
+
+        <div class="canvas-batch-panel__options">
+          <label>
+            模型
+            <select
+              v-model="batchImageSettings.model"
+              :disabled="batchImageGenerating"
+            >
+              <option
+                v-for="model in imageModelOptions"
+                :key="model"
+                :value="model"
+              >
+                {{ model }}
+              </option>
+            </select>
+          </label>
+          <label>
+            尺寸
+            <select
+              v-model="batchImageSettings.imageSize"
+              :disabled="batchImageGenerating"
+            >
+              <option
+                v-for="size in imageSizeOptions"
+                :key="size"
+                :value="size"
+              >
+                {{ size }}
+              </option>
+            </select>
+          </label>
+          <label>
+            数量
+            <select
+              v-model.number="batchImageSettings.imageCount"
+              :disabled="batchImageGenerating"
+            >
+              <option
+                v-for="count in imageCountOptions"
+                :key="count"
+                :value="count"
+              >
+                {{ count }}
+              </option>
+            </select>
+          </label>
+        </div>
+
+        <div class="canvas-batch-panel__actions">
+          <button
+            class="canvas-batch-btn"
+            type="button"
+            :disabled="batchImageGenerating"
+            @click="selectCurrentTextNodesForBatch"
+          >
+            选中节点
+          </button>
+          <button
+            class="canvas-batch-btn canvas-batch-btn--primary"
+            type="button"
+            data-testid="batch-generate-images"
+            :disabled="!selectedBatchPromptItems.length || batchImageGenerating"
+            @click="runBatchImageGeneration"
+          >
+            {{ batchImageGenerating ? '生成中' : '批量生成图片' }}
+          </button>
+        </div>
+      </aside>
+
       <aside
         v-if="assetDrawerVisible"
         class="canvas-asset-panel"
@@ -452,6 +578,15 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   const assetLoading = ref(false)
   const assetItems = ref([])
   const relationSourceItemId = ref('')
+  const batchImagePanelVisible = ref(false)
+  const batchImageGenerating = ref(false)
+  const batchSelectedPromptIds = ref([])
+  const batchStatusBySource = reactive({})
+  const batchImageSettings = reactive({
+    model: '',
+    imageSize: DEFAULT_IMAGE_SIZE,
+    imageCount: DEFAULT_IMAGE_COUNT
+  })
   const handledEntryModeKeys = new Set()
 
   const entryModeConfigs = {
@@ -788,6 +923,13 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   const defaultCanvasApiKeyId = computed(
     () => String(apiKeyOptions.value[0]?.value || '').trim()
   )
+  const defaultImageApiKeyId = computed(() => {
+    const imageKey = apiKeyOptions.value.find((option) => {
+      const haystack = `${option.label || ''} ${option.baseUrl || ''}`.toLowerCase()
+      return haystack.includes('image') || haystack.includes('img')
+    })
+    return String(imageKey?.value || defaultCanvasApiKeyId.value || '').trim()
+  })
   const defaultVideoApiKeyId = computed(() => {
     const videoKey = apiKeyOptions.value.find((option) => {
       const haystack = `${option.label || ''} ${option.baseUrl || ''}`.toLowerCase()
@@ -810,13 +952,20 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       selectedItem.value?.generation_config?.model || ''
     )
   )
+  const batchPromptItems = computed(() =>
+    items.value.filter((item) => item.item_type === 'text')
+  )
+  const selectedBatchPromptItems = computed(() => {
+    const selectedIdSet = new Set(batchSelectedPromptIds.value)
+    return batchPromptItems.value.filter((item) => selectedIdSet.has(item.id))
+  })
 
   const buildDefaultGenerationConfig = (type) => {
     if (type !== 'image' && type !== 'video') {
       return {}
     }
     const apiKeyId =
-      type === 'video' ? defaultVideoApiKeyId.value : defaultCanvasApiKeyId.value
+      type === 'video' ? defaultVideoApiKeyId.value : defaultImageApiKeyId.value
     const model =
       type === 'image' ? defaultImageModel.value : defaultVideoModel.value
     const config = {}
@@ -872,6 +1021,59 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       .map((itemId) => items.value.find((item) => item.id === itemId))
       .filter(Boolean)
   })
+
+  const textPromptForItem = (item) =>
+    String(
+      item?.content?.promptPlainText ||
+        item?.content?.prompt_plain_text ||
+        item?.content?.prompt ||
+        item?.content?.text ||
+        item?.content?.text_preview ||
+        item?.title ||
+        ''
+    ).trim()
+
+  const batchPromptTitle = (item) =>
+    String(item?.title || '').trim() || 'Prompt 节点'
+
+  const batchPromptPreview = (item) =>
+    textPromptForItem(item).slice(0, 80) || '暂无 Prompt 内容'
+
+  const batchStatusText = (status) =>
+    ({
+      pending: '等待',
+      running: '生成中',
+      completed: '成功',
+      failed: '失败'
+    })[status] || status
+
+  const toggleBatchPrompt = (itemId) => {
+    const selected = new Set(batchSelectedPromptIds.value)
+    if (selected.has(itemId)) {
+      selected.delete(itemId)
+    } else {
+      selected.add(itemId)
+    }
+    batchSelectedPromptIds.value = [...selected]
+  }
+
+  const selectCurrentTextNodesForBatch = () => {
+    const selectedTextIds = (selectedItemIds.value || []).filter((itemId) =>
+      items.value.some(
+        (item) => item.id === itemId && item.item_type === 'text'
+      )
+    )
+    batchSelectedPromptIds.value = selectedTextIds.length
+      ? selectedTextIds
+      : batchPromptItems.value.slice(0, 2).map((item) => item.id)
+  }
+
+  const openBatchImagePanel = () => {
+    if (!batchSelectedPromptIds.value.length) {
+      selectCurrentTextNodesForBatch()
+    }
+    batchImagePanelVisible.value = true
+  }
 
   const relationNodeLabel = (item) => {
     if (!item) return ''
@@ -1196,6 +1398,116 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
         items.value.find((item) => item.id === (response?.item?.id || targetItem.id)) ||
         response?.item ||
         targetItem
+    }
+  }
+
+  const runBatchImageGeneration = async () => {
+    const sources = selectedBatchPromptItems.value
+    if (!sources.length || batchImageGenerating.value) return
+    if (!batchImageSettings.model && !defaultImageModel.value) {
+      ElMessage.warning('没有可用图片模型')
+      return
+    }
+    const runnableSources = sources.filter((source) => textPromptForItem(source))
+    if (!runnableSources.length) {
+      ElMessage.warning('请选择有 Prompt 内容的文本节点')
+      return
+    }
+
+    batchImageGenerating.value = true
+    const batchId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `batch-${Date.now()}`
+    let completed = 0
+    const failed = []
+    const completedImageItemIds = []
+
+    try {
+      syncSelectedStudioDraft()
+      if (dirty.value) {
+        await save()
+      }
+
+      for (const [index, source] of runnableSources.entries()) {
+        batchStatusBySource[source.id] = 'running'
+        const prompt = textPromptForItem(source)
+        try {
+          const imageNode = await createLinkedNodeFromItem(source, 'image', {
+            title: `批量图片 ${index + 1}`,
+            position_x: source.position_x + source.width + 140,
+            position_y: source.position_y + index * 28,
+            content: {
+              prompt,
+              promptTokens: [{ type: 'text', text: prompt }],
+              aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+              imageSize: batchImageSettings.imageSize || DEFAULT_IMAGE_SIZE,
+              imageCount: Number(batchImageSettings.imageCount || 1),
+              batch_id: batchId,
+              batch_index: index + 1,
+              batch_total: runnableSources.length,
+              batch_label: '分镜图片'
+            },
+            generation_config: {
+              api_key_id: defaultImageApiKeyId.value,
+              model: batchImageSettings.model || defaultImageModel.value
+            }
+          })
+          if (!imageNode?.id) {
+            throw new Error('图片节点创建失败')
+          }
+
+          const payload = buildGenerationPayload(imageNode)
+          payload.options = {
+            ...(payload.options || {}),
+            batch_id: batchId,
+            batch_index: index + 1,
+            batch_total: runnableSources.length,
+            batch_label: '分镜图片',
+            source_item_id: source.id
+          }
+          const response = await generate(imageNode, payload)
+          if (response?.item?.id) {
+            updateItem(response.item.id, {
+              content: response.item.content,
+              generation_config: response.item.generation_config,
+              last_run_status: response.item.last_run_status,
+              last_run_error: response.item.last_run_error,
+              last_output: response.item.last_output,
+              is_persisted: true
+            })
+            await mergeCreatedItemsFromGeneration(response)
+            await loadHistory(response.item.id)
+            completedImageItemIds.push(response.item.id)
+          }
+          batchStatusBySource[source.id] = 'completed'
+          completed += 1
+        } catch (error) {
+          batchStatusBySource[source.id] = 'failed'
+          failed.push({
+            item: source,
+            message:
+              error?.response?.data?.detail ||
+              error?.message ||
+              '图片生成失败'
+          })
+        }
+      }
+
+      await save()
+      const firstResult = items.value.find(
+        (item) => item.id === completedImageItemIds[0]
+      )
+      if (firstResult) {
+        await focusCanvasItem(firstResult)
+      }
+      if (failed.length) {
+        ElMessage.warning(`批量生成完成 ${completed} / ${runnableSources.length}，失败 ${failed.length} 项`)
+      } else {
+        ElMessage.success(`批量生成完成 ${completed} / ${runnableSources.length}`)
+      }
+    } finally {
+      batchImageGenerating.value = false
     }
   }
 
@@ -2779,6 +3091,12 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     }
   })
 
+  watch(defaultImageModel, (model) => {
+    if (!batchImageSettings.model && model) {
+      batchImageSettings.model = model
+    }
+  }, { immediate: true })
+
   watch(
     () => route.params.canvasId,
     async (canvasId) => {
@@ -2918,6 +3236,192 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   .canvas-asset-panel__icon-btn:disabled {
     cursor: wait;
     opacity: 0.6;
+  }
+
+  .canvas-batch-launcher {
+    position: absolute;
+    left: 88px;
+    top: 24px;
+    z-index: 990;
+    min-height: 34px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 8px;
+    background: #1f6fff;
+    color: #fff;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    box-shadow: 0 10px 24px rgba(31, 111, 255, 0.2);
+  }
+
+  .canvas-batch-launcher:disabled {
+    cursor: wait;
+    opacity: 0.65;
+  }
+
+  .canvas-batch-panel {
+    position: absolute;
+    left: 88px;
+    top: 72px;
+    z-index: 1220;
+    width: min(420px, calc(100% - 132px));
+    max-height: min(78vh, 620px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid rgba(31, 49, 88, 0.14);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 18px 42px rgba(24, 42, 80, 0.18);
+  }
+
+  .canvas-batch-panel__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid rgba(31, 49, 88, 0.08);
+  }
+
+  .canvas-batch-panel__header h3 {
+    margin: 0;
+    color: #1d2b46;
+    font-size: 16px;
+    line-height: 1.3;
+  }
+
+  .canvas-batch-panel__header p {
+    margin: 4px 0 0;
+    color: #6b7894;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .canvas-batch-panel__close {
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 50%;
+    background: #f4f6fa;
+    color: #4c5f7d;
+    cursor: pointer;
+    font: inherit;
+    font-size: 22px;
+    line-height: 30px;
+  }
+
+  .canvas-batch-panel__state {
+    padding: 28px 16px;
+    color: #6b7894;
+    font-size: 14px;
+    text-align: center;
+  }
+
+  .canvas-batch-panel__body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    overflow: auto;
+  }
+
+  .canvas-batch-prompt {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 10px;
+    padding: 9px 10px;
+    border: 1px solid rgba(31, 49, 88, 0.1);
+    border-radius: 10px;
+    background: #fff;
+    color: #253653;
+    font-size: 13px;
+  }
+
+  .canvas-batch-prompt input {
+    margin-top: 2px;
+  }
+
+  .canvas-batch-prompt strong,
+  .canvas-batch-prompt small {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .canvas-batch-prompt small {
+    margin-top: 3px;
+    color: #6b7894;
+    font-size: 12px;
+  }
+
+  .canvas-batch-prompt em {
+    color: #2f68ff;
+    font-size: 12px;
+    font-style: normal;
+    font-weight: 700;
+  }
+
+  .canvas-batch-panel__options {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid rgba(31, 49, 88, 0.08);
+  }
+
+  .canvas-batch-panel__options label {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 5px;
+    color: #6b7894;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .canvas-batch-panel__options select {
+    min-width: 0;
+    height: 32px;
+    border: 1px solid rgba(31, 49, 88, 0.16);
+    border-radius: 8px;
+    background: #fff;
+    color: #253653;
+  }
+
+  .canvas-batch-panel__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 0 12px 12px;
+  }
+
+  .canvas-batch-btn {
+    min-height: 32px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 8px;
+    background: #edf2f8;
+    color: #274064;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .canvas-batch-btn--primary {
+    background: #2f68ff;
+    color: #fff;
+  }
+
+  .canvas-batch-btn:disabled {
+    cursor: wait;
+    opacity: 0.55;
   }
 
   .canvas-asset-panel__close {
@@ -3212,4 +3716,3 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     }
   }
 </style>
-

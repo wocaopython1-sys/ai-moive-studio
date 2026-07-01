@@ -254,18 +254,26 @@ const formatTime = (value) => {
 }
 
 const formatTaskParams = (task) => {
-  const params = task?.params || task?.request_payload?.options || {}
+  const params = {
+    ...(task?.request_payload?.options || {}),
+    ...(task?.params || {})
+  }
   if (!params || typeof params !== 'object') return ''
   const parts = []
   const size = params.image_size || params.size
   const ratio = params.aspect_ratio
   const count = params.n
   const duration = params.duration || params.duration_seconds
+  const batchLabel = params.batch_label
+  const batchIndex = params.batch_index
+  const batchTotal = params.batch_total
   if (size) parts.push(`尺寸 ${size}`)
   if (ratio) parts.push(`比例 ${ratio}`)
   if (count) parts.push(`数量 ${count}`)
   if (duration) parts.push(`时长 ${duration}s`)
   if (params.reference_images) parts.push(`参考图 ${params.reference_images}`)
+  if (batchLabel) parts.push(`批量 ${batchLabel}`)
+  if (batchIndex && batchTotal) parts.push(`批次 ${batchIndex}/${batchTotal}`)
   return parts.join(' / ')
 }
 
