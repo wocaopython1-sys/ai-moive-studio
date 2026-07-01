@@ -171,6 +171,24 @@ class CanvasGenerateResultResponse(SuccessResponse):
     created_connections: List[CanvasConnectionPayload] = Field(default_factory=list)
 
 
+class CanvasComposeVideosRequest(BaseModel):
+    source_item_ids: List[UUID] = Field(default_factory=list)
+    title: str = Field("合成视频", min_length=1, max_length=200)
+    mode: str = Field("concat")
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CanvasComposeVideosResponse(SuccessResponse):
+    status: str
+    created_item: CanvasItemPayload
+    generation: CanvasGenerationResponse
+    created_connections: List[CanvasConnectionPayload] = Field(default_factory=list)
+    object_key: str
+    preview_url: str
+    stream_url: str
+    download_url: str
+
+
 class CanvasApplyGenerationResponse(SuccessResponse):
     item: CanvasItemPayload
     generation: CanvasGenerationResponse

@@ -180,6 +180,17 @@
         批量生成视频
       </button>
 
+      <button
+        v-if="composeVideoItems.length"
+        class="canvas-batch-launcher canvas-batch-launcher--compose"
+        type="button"
+        data-testid="open-compose-video-panel"
+        :disabled="composeVideoExporting"
+        @click="openComposeVideoPanel"
+      >
+        合成视频
+      </button>
+
       <aside
         v-if="batchImagePanelVisible"
         class="canvas-batch-panel"
@@ -417,6 +428,113 @@
             @click="runBatchVideoGeneration"
           >
             {{ batchVideoGenerating ? '入队中' : '生成视频队列' }}
+          </button>
+        </div>
+      </aside>
+
+      <aside
+        v-if="composeVideoPanelVisible"
+        class="canvas-batch-panel canvas-batch-panel--compose"
+        data-testid="compose-video-panel"
+      >
+        <header class="canvas-batch-panel__header">
+          <div>
+            <h3>合成视频</h3>
+            <p>{{ selectedComposeVideoItems.length }} / {{ composeVideoItems.length }} 个视频</p>
+          </div>
+          <button
+            class="canvas-batch-panel__close"
+            type="button"
+            aria-label="关闭合成视频"
+            :disabled="composeVideoExporting"
+            @click="composeVideoPanelVisible = false"
+          >
+            ×
+          </button>
+        </header>
+
+        <div v-if="!composeVideoItems.length" class="canvas-batch-panel__state">
+          当前 Canvas 没有可合成的视频节点
+        </div>
+        <div v-else class="canvas-batch-panel__body">
+          <div
+            v-for="item in composeVideoItems"
+            :key="item.id"
+            class="canvas-batch-prompt canvas-compose-row"
+            :class="{ 'is-disabled': !isComposeVideoReady(item) }"
+          >
+            <label class="canvas-compose-row__main">
+              <input
+                type="checkbox"
+                :checked="composeSelectedVideoIds.includes(item.id)"
+                :disabled="composeVideoExporting || !isComposeVideoReady(item)"
+                @change="toggleComposeVideo(item.id)"
+              />
+              <span>
+                <strong>{{ composeVideoTitle(item) }}</strong>
+                <small>{{ composeVideoPreview(item) }}</small>
+              </span>
+            </label>
+            <em v-if="composeVideoOrderIndex(item.id) >= 0">
+              第 {{ composeVideoOrderIndex(item.id) + 1 }} 段
+            </em>
+            <em v-else-if="!isComposeVideoReady(item)">不可用</em>
+            <div
+              v-if="composeVideoOrderIndex(item.id) >= 0"
+              class="canvas-compose-row__order"
+            >
+              <button
+                type="button"
+                :disabled="composeVideoExporting || composeVideoOrderIndex(item.id) <= 0"
+                @click="moveComposeVideo(item.id, -1)"
+              >
+                上移
+              </button>
+              <button
+                type="button"
+                :disabled="composeVideoExporting || composeVideoOrderIndex(item.id) >= selectedComposeVideoItems.length - 1"
+                @click="moveComposeVideo(item.id, 1)"
+              >
+                下移
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="canvas-batch-panel__options canvas-batch-panel__options--compose">
+          <label class="canvas-batch-panel__option--wide">
+            标题
+            <input
+              v-model="composeVideoTitleInput"
+              :disabled="composeVideoExporting"
+              placeholder="合成视频"
+            />
+          </label>
+          <label>
+            模式
+            <select disabled>
+              <option value="concat">MP4 concat</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="canvas-batch-panel__actions">
+          <button
+            class="canvas-batch-btn"
+            type="button"
+            :disabled="composeVideoExporting"
+            @click="selectCurrentVideoNodesForCompose"
+          >
+            选中视频
+          </button>
+          <button
+            class="canvas-batch-btn canvas-batch-btn--primary"
+            type="button"
+            data-testid="compose-videos"
+            :disabled="selectedComposeVideoItems.length < 2 || composeVideoExporting"
+            @click="runComposeVideos"
+          >
+            {{ composeVideoExporting ? '合成中' : '合成导出' }}
           </button>
         </div>
       </aside>
@@ -734,6 +852,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     aspectRatio: DEFAULT_ASPECT_RATIO,
     durationSeconds: DEFAULT_VIDEO_DURATION_SECONDS
   })
+  const composeVideoPanelVisible = ref(false)
+  const composeVideoExporting = ref(false)
+  const composeSelectedVideoIds = ref([])
+  const composeVideoTitleInput = ref('合成视频')
   const handledEntryModeKeys = new Set()
 
   const entryModeConfigs = {
@@ -1119,6 +1241,16 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     return batchVideoItems.value.filter((item) => selectedIdSet.has(item.id))
   })
 
+  const composeVideoItems = computed(() =>
+    items.value.filter((item) => item.item_type === 'video')
+  )
+  const selectedComposeVideoItems = computed(() => {
+    const itemById = new Map(composeVideoItems.value.map((item) => [item.id, item]))
+    return composeSelectedVideoIds.value
+      .map((itemId) => itemById.get(itemId))
+      .filter(Boolean)
+  })
+
   const buildDefaultGenerationConfig = (type) => {
     if (type !== 'image' && type !== 'video') {
       return {}
@@ -1300,6 +1432,79 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       selectCurrentImageNodesForBatchVideo()
     }
     batchVideoPanelVisible.value = true
+  }
+
+  const isComposeVideoReady = (item) =>
+    item?.item_type === 'video' &&
+    item?.last_run_status === 'completed' &&
+    Boolean(resolveObjectKeyFromItem(item) || resolveItemMediaUrl(item, 'stream'))
+
+  const composeVideoTitle = (item) =>
+    String(item?.title || '').trim() || '视频节点'
+
+  const composeVideoPreview = (item) => {
+    const objectKey = resolveObjectKeyFromItem(item)
+    if (objectKey) return objectKey.split('/').pop() || objectKey
+    if (item?.last_run_status !== 'completed') {
+      return item?.last_run_error || '视频未完成'
+    }
+    return '暂无视频结果'
+  }
+
+  const composeVideoOrderIndex = (itemId) =>
+    composeSelectedVideoIds.value.findIndex((entryId) => entryId === itemId)
+
+  const toggleComposeVideo = (itemId) => {
+    const item = items.value.find((entry) => entry.id === itemId)
+    if (!isComposeVideoReady(item)) {
+      ElMessage.warning('该视频节点未完成或没有可用视频')
+      return
+    }
+    const selected = [...composeSelectedVideoIds.value]
+    const index = selected.indexOf(itemId)
+    if (index >= 0) {
+      selected.splice(index, 1)
+    } else {
+      if (selected.length >= 5) {
+        ElMessage.warning('一次最多合成 5 个视频')
+        return
+      }
+      selected.push(itemId)
+    }
+    composeSelectedVideoIds.value = selected
+  }
+
+  const moveComposeVideo = (itemId, direction) => {
+    const selected = [...composeSelectedVideoIds.value]
+    const index = selected.indexOf(itemId)
+    const nextIndex = index + direction
+    if (index < 0 || nextIndex < 0 || nextIndex >= selected.length) return
+    const [item] = selected.splice(index, 1)
+    selected.splice(nextIndex, 0, item)
+    composeSelectedVideoIds.value = selected
+  }
+
+  const selectCurrentVideoNodesForCompose = () => {
+    const selectedVideoIds = (selectedItemIds.value || []).filter((itemId) =>
+      items.value.some(
+        (item) => item.id === itemId && item.item_type === 'video' && isComposeVideoReady(item)
+      )
+    )
+    const fallbackVideoIds = composeVideoItems.value
+      .filter(isComposeVideoReady)
+      .slice(0, 2)
+      .map((item) => item.id)
+    composeSelectedVideoIds.value = (selectedVideoIds.length
+      ? selectedVideoIds
+      : fallbackVideoIds
+    ).slice(0, 5)
+  }
+
+  const openComposeVideoPanel = () => {
+    if (!composeSelectedVideoIds.value.length) {
+      selectCurrentVideoNodesForCompose()
+    }
+    composeVideoPanelVisible.value = true
   }
 
   const relationNodeLabel = (item) => {
@@ -1872,6 +2077,70 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       }
     } finally {
       batchVideoGenerating.value = false
+    }
+  }
+
+  const runComposeVideos = async () => {
+    if (composeVideoExporting.value) return
+    const sources = selectedComposeVideoItems.value.filter(isComposeVideoReady)
+    if (sources.length < 2) {
+      ElMessage.warning('至少选择 2 个已完成视频')
+      return
+    }
+    if (sources.length > 5) {
+      ElMessage.warning('一次最多合成 5 个视频')
+      return
+    }
+    const sourceItemIds = sources.map((item) => item.id)
+    composeVideoExporting.value = true
+    try {
+      syncSelectedStudioDraft()
+      if (dirty.value) {
+        await save()
+      }
+      const response = await canvasService.composeVideos(document.value.id, {
+        source_item_ids: sourceItemIds,
+        title: String(composeVideoTitleInput.value || '').trim() || '合成视频',
+        mode: 'concat',
+        options: {
+          order: sourceItemIds,
+          clip_count: sourceItemIds.length,
+          batch_label: '成片合成'
+        }
+      })
+      mergeConnections(response?.created_connections || [])
+      const createdItem = response?.created_item
+      if (createdItem?.id) {
+        const exists = items.value.some((item) => item.id === createdItem.id)
+        if (exists) {
+          updateItem(createdItem.id, {
+            content: createdItem.content,
+            generation_config: createdItem.generation_config,
+            last_run_status: createdItem.last_run_status,
+            last_run_error: createdItem.last_run_error,
+            last_output: createdItem.last_output,
+            is_persisted: true
+          })
+        } else {
+          items.value.push({
+            ...createdItem,
+            content: createdItem.content || {},
+            generation_config: createdItem.generation_config || {},
+            last_output: createdItem.last_output || {},
+            is_persisted: true
+          })
+        }
+        await loadHistory(createdItem.id)
+        await focusCanvasItem(createdItem)
+      }
+      composeVideoPanelVisible.value = false
+      ElMessage.success(response?.message || '视频已合成')
+    } catch (error) {
+      ElMessage.error(
+        error?.response?.data?.detail || error?.message || '视频合成失败'
+      )
+    } finally {
+      composeVideoExporting.value = false
     }
   }
 
@@ -3649,6 +3918,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     left: 218px;
   }
 
+  .canvas-batch-launcher--compose {
+    left: 348px;
+  }
+
   .canvas-batch-panel {
     position: absolute;
     left: 88px;
@@ -3667,6 +3940,11 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
 
   .canvas-batch-panel--video {
     left: 218px;
+  }
+
+  .canvas-batch-panel--compose {
+    left: 348px;
+    width: min(520px, calc(100vw - 388px));
   }
 
   .canvas-batch-panel__header {
@@ -3763,6 +4041,38 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     opacity: 0.55;
   }
 
+  .canvas-compose-row {
+    align-items: center;
+  }
+
+  .canvas-compose-row__main {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .canvas-compose-row__order {
+    display: flex;
+    gap: 6px;
+  }
+
+  .canvas-compose-row__order button {
+    border: 1px solid rgba(31, 49, 88, 0.16);
+    border-radius: 6px;
+    background: #fff;
+    color: #33415f;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 4px 7px;
+  }
+
+  .canvas-compose-row__order button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
   .canvas-batch-panel__options {
     display: grid;
     grid-template-columns: 1fr 1fr auto;
@@ -3785,12 +4095,17 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 86px 74px;
   }
 
+  .canvas-batch-panel__options--compose {
+    grid-template-columns: minmax(0, 1fr) 120px;
+  }
+
   .canvas-batch-panel__option--wide {
     min-width: 0;
   }
 
   .canvas-batch-panel__options select,
-  .canvas-batch-panel__options textarea {
+  .canvas-batch-panel__options textarea,
+  .canvas-batch-panel__options input {
     min-width: 0;
     height: 32px;
     border: 1px solid rgba(31, 49, 88, 0.16);

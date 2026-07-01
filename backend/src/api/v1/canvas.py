@@ -9,6 +9,8 @@ from src.api.dependencies import get_current_user_required
 from src.api.schemas.canvas import (
     CanvasApplyGenerationResponse,
     CanvasBatchDeleteItemsRequest,
+    CanvasComposeVideosRequest,
+    CanvasComposeVideosResponse,
     CanvasDocumentCreate,
     CanvasDocumentListResponse,
     CanvasDocumentResponse,
@@ -392,6 +394,42 @@ async def delete_canvas_connection(
     service = CanvasService(db)
     await service.delete_connection(document_id, connection_id, str(current_user.id))
     await db.commit()
+
+
+@router.post("/canvas-documents/{document_id}/videos/compose", response_model=CanvasComposeVideosResponse)
+async def compose_canvas_videos(
+    document_id: str,
+    payload: CanvasComposeVideosRequest,
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    service = CanvasService(db)
+    result = await service.compose_videos(document_id, str(current_user.id), payload.model_dump())
+    await db.commit()
+    item = result["item"]
+    generation = result["generation"]
+    object_key = result["object_key"]
+    return CanvasComposeVideosResponse(
+        success=True,
+        message="视频已合成",
+        status=result["status"],
+        created_item=await build_item_payload(item),
+        generation=await build_generation_response(generation),
+        created_connections=[
+            CanvasConnectionPayload(
+                id=connection.id,
+                source_item_id=connection.source_item_id,
+                target_item_id=connection.target_item_id,
+                source_handle=connection.source_handle,
+                target_handle=connection.target_handle,
+            )
+            for connection in result.get("connections") or []
+        ],
+        object_key=object_key,
+        preview_url=media_url_for_object_key(object_key, "preview"),
+        stream_url=media_url_for_object_key(object_key, "stream"),
+        download_url=media_url_for_object_key(object_key, "download"),
+    )
 
 
 @router.get("/canvas-documents/{document_id}/graph", response_model=CanvasGraphResponse)

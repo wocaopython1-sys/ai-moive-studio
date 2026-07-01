@@ -267,10 +267,16 @@ const formatTaskParams = (task) => {
   const batchLabel = params.batch_label
   const batchIndex = params.batch_index
   const batchTotal = params.batch_total
+  const mode = params.mode
+  const clipCount = params.clip_count
+  const sourceVideos = params.source_videos
   if (size) parts.push(`尺寸 ${size}`)
   if (ratio) parts.push(`比例 ${ratio}`)
   if (count) parts.push(`数量 ${count}`)
   if (duration) parts.push(`时长 ${duration}s`)
+  if (mode) parts.push(`模式 ${mode}`)
+  if (clipCount) parts.push(`片段 ${clipCount}`)
+  if (sourceVideos) parts.push(`来源视频 ${sourceVideos}`)
   if (params.reference_images) parts.push(`参考图 ${params.reference_images}`)
   if (batchLabel) parts.push(`批量 ${batchLabel}`)
   if (batchIndex && batchTotal) parts.push(`批次 ${batchIndex}/${batchTotal}`)

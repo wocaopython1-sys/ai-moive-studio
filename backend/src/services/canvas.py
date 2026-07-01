@@ -5,6 +5,8 @@ import inspect
 import io
 import json
 import re
+import subprocess
+import tempfile
 import uuid
 from urllib.parse import urlparse, unquote
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -410,6 +412,228 @@ class CanvasService(BaseService):
             raise NotFoundError("画布节点不存在", resource_id=item_id, resource_type="canvas_item")
         return item
 
+    def _video_object_key_from_item(self, item: CanvasItem) -> str:
+        content = item.content_json or {}
+        output = item.last_output_json or {}
+        return str(
+            content.get("result_video_object_key")
+            or output.get("result_video_object_key")
+            or extract_object_key_from_media_url(content.get("result_video_url"))
+            or extract_object_key_from_media_url(output.get("result_video_url"))
+            or ""
+        ).strip()
+
+    async def compose_videos(
+        self,
+        document_id: str,
+        user_id: str,
+        request: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        document = await self.get_document(document_id, user_id)
+        options = request.get("options") if isinstance(request.get("options"), dict) else {}
+        requested_ids = request.get("source_item_ids") or options.get("order") or []
+        ordered_ids: List[str] = []
+        seen_ids = set()
+        for raw_item_id in requested_ids:
+            item_id = str(raw_item_id or "").strip()
+            if not item_id or item_id in seen_ids:
+                continue
+            ordered_ids.append(item_id)
+            seen_ids.add(item_id)
+
+        if len(ordered_ids) < 2:
+            raise BusinessLogicError("至少选择 2 个视频才能合成")
+        if len(ordered_ids) > 5:
+            raise BusinessLogicError("一次最多合成 5 个视频")
+
+        normalized_ids = [ensure_canvas_uuid(item_id) for item_id in ordered_ids]
+        stmt = select(CanvasItem).where(
+            CanvasItem.document_id == document.id,
+            CanvasItem.id.in_(normalized_ids),
+        )
+        loaded_items = list((await self.execute(stmt)).scalars().all())
+        item_by_id = {str(item.id): item for item in loaded_items}
+
+        source_items: List[CanvasItem] = []
+        source_object_keys: List[str] = []
+        for item_id in ordered_ids:
+            item = item_by_id.get(item_id)
+            if not item:
+                raise NotFoundError("视频节点不存在", resource_id=item_id, resource_type="canvas_item")
+            if item.item_type != CanvasItemType.VIDEO.value:
+                raise BusinessLogicError("只能选择视频节点进行合成")
+            if item.last_run_status != CanvasRunStatus.COMPLETED.value:
+                raise BusinessLogicError("视频未完成，不能合成")
+            object_key = self._video_object_key_from_item(item)
+            if not object_key:
+                raise BusinessLogicError("视频节点缺少 object_key，不能合成")
+            source_items.append(item)
+            source_object_keys.append(object_key)
+
+        storage = await get_storage_client()
+        missing_keys = []
+        for object_key in source_object_keys:
+            if not await storage.file_exists(object_key):
+                missing_keys.append(object_key)
+        if missing_keys:
+            raise BusinessLogicError(f"视频文件不存在，不能合成: {missing_keys[0]}")
+
+        title = str(request.get("title") or "合成视频").strip() or "合成视频"
+        title = title[:200]
+        final_filename = f"{title}.mp4" if not title.lower().endswith(".mp4") else title
+        output_object_key = storage.generate_object_key(user_id, "compose.mp4")
+
+        with tempfile.TemporaryDirectory(prefix="aicon-compose-") as temp_dir:
+            input_paths: List[str] = []
+            for index, object_key in enumerate(source_object_keys):
+                input_path = f"{temp_dir}/input_{index}.mp4"
+                await storage.download_file_to_path(object_key, input_path)
+                input_paths.append(input_path)
+
+            concat_list_path = f"{temp_dir}/concat.txt"
+            with open(concat_list_path, "w", encoding="utf-8") as concat_file:
+                for input_path in input_paths:
+                    concat_file.write(f"file '{input_path}'\n")
+
+            output_path = f"{temp_dir}/final.mp4"
+            command = [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-fflags",
+                "+genpts",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_list_path,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "20",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                "-movflags",
+                "+faststart",
+                output_path,
+            ]
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                command,
+                capture_output=True,
+                text=True,
+                timeout=240,
+            )
+            if completed.returncode != 0:
+                ffmpeg_error = (completed.stderr or completed.stdout or "ffmpeg 合成失败").strip()
+                raise BusinessLogicError(ffmpeg_error[-1000:])
+
+            storage_info = await storage.upload_file_from_path(
+                user_id=user_id,
+                file_path=output_path,
+                original_filename=final_filename,
+                object_key=output_object_key,
+                metadata={
+                    "source": "compose",
+                    "content_type": "video/mp4",
+                    "compose_source_item_ids": ",".join(ordered_ids),
+                },
+            )
+
+        max_right = max(float(item.position_x or 0) + float(item.width or 0) for item in source_items)
+        base_y = float(source_items[0].position_y or 0)
+        content = {
+            "result_video_object_key": output_object_key,
+            "compose_source_item_ids": ordered_ids,
+            "compose_mode": "concat",
+            "clip_count": len(source_items),
+        }
+        result_payload = {
+            "result_video_object_key": output_object_key,
+            "provider": "local",
+            "provider_response": {
+                "provider": "local",
+                "tool": "ffmpeg",
+                "mode": "concat",
+            },
+            "compose_source_item_ids": ordered_ids,
+            "clip_count": len(source_items),
+            "storage_info": storage_info,
+        }
+        final_item = CanvasItem(
+            document_id=document.id,
+            item_type=CanvasItemType.VIDEO.value,
+            title=title,
+            position_x=max_right + 180,
+            position_y=base_y,
+            width=360,
+            height=240,
+            content_json=self._sanitize_media_content(content),
+            generation_config_json={"mode": "concat", "model": "ffmpeg"},
+            last_run_status=CanvasRunStatus.COMPLETED.value,
+            last_run_error=None,
+            last_output_json=self._sanitize_media_result_payload(result_payload),
+        )
+        self.add(final_item)
+        await self.flush()
+        await self.refresh(final_item)
+
+        request_payload = {
+            "provider": "local",
+            "model": "ffmpeg-concat",
+            "prompt": title,
+            "options": {
+                "mode": "concat",
+                "source_item_ids": ordered_ids,
+                "clip_count": len(source_items),
+                **options,
+            },
+        }
+        generation = CanvasItemGeneration(
+            item_id=final_item.id,
+            document_id=document.id,
+            user_id=ensure_canvas_uuid(user_id),
+            generation_type=CanvasGenerationType.VIDEO.value,
+            request_payload_json=request_payload,
+            status=CanvasRunStatus.COMPLETED.value,
+            result_payload_json=self._sanitize_media_result_payload(result_payload),
+            error_message=None,
+        )
+        self.add(generation)
+
+        connections: List[CanvasConnection] = []
+        for source_item in source_items:
+            connection = CanvasConnection(
+                document_id=document.id,
+                source_item_id=source_item.id,
+                target_item_id=final_item.id,
+                source_handle="right",
+                target_handle="left",
+            )
+            self.add(connection)
+            connections.append(connection)
+
+        await self.flush()
+        await self.refresh(generation)
+        for connection in connections:
+            await self.refresh(connection)
+        await self.refresh(final_item)
+
+        return {
+            "status": CanvasRunStatus.COMPLETED.value,
+            "item": final_item,
+            "generation": generation,
+            "connections": connections,
+            "object_key": output_object_key,
+            "storage_info": storage_info,
+        }
+
     async def get_generation(self, generation_id: str) -> CanvasItemGeneration:
         stmt = select(CanvasItemGeneration).where(CanvasItemGeneration.id == ensure_canvas_uuid(generation_id))
         generation = (await self.execute(stmt)).scalar_one_or_none()
@@ -717,10 +941,14 @@ class CanvasTaskHistoryService(BaseService):
             "n",
             "duration",
             "duration_seconds",
+            "mode",
+            "clip_count",
         ):
             value = options.get(key)
             if value not in (None, "", []):
                 summary[key] = value
+        if options.get("source_item_ids"):
+            summary["source_videos"] = len(options.get("source_item_ids") or [])
         if options.get("reference_image_urls"):
             summary["reference_images"] = len(options.get("reference_image_urls") or [])
         if options.get("reference_image_object_keys"):

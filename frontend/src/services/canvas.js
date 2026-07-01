@@ -94,6 +94,10 @@ export const canvasService = {
     return post(`/canvas-documents/${documentId}/items/previews`, { item_ids: itemIds })
   },
 
+  composeVideos(documentId, payload = {}) {
+    return post(`/canvas-documents/${documentId}/videos/compose`, payload)
+  },
+
   createConnection(documentId, payload) {
     return post(`/canvas-documents/${documentId}/connections`, payload)
   },
