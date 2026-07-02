@@ -856,6 +856,7 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   const composeVideoExporting = ref(false)
   const composeSelectedVideoIds = ref([])
   const composeVideoTitleInput = ref('合成视频')
+  const composeVideoPollingIds = new Set()
   const handledEntryModeKeys = new Set()
 
   const entryModeConfigs = {
@@ -2080,6 +2081,38 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     }
   }
 
+  const refreshComposeResultFromGraph = async (itemId) => {
+    if (!document.value?.id || !itemId) return null
+    await loadDocument(document.value.id)
+    return items.value.find((item) => item.id === itemId) || null
+  }
+
+  const pollComposeVideoResult = async (itemId) => {
+    if (!itemId || composeVideoPollingIds.has(itemId)) return
+    composeVideoPollingIds.add(itemId)
+    const maxAttempts = 120
+    try {
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2500))
+        const item = await refreshComposeResultFromGraph(itemId)
+        if (!item) continue
+        if (item.last_run_status === 'completed') {
+          await loadHistory(item.id)
+          await focusCanvasItem(item)
+          ElMessage.success('视频合成已完成')
+          return
+        }
+        if (item.last_run_status === 'failed') {
+          ElMessage.error(item.last_run_error || '视频合成失败')
+          return
+        }
+      }
+      ElMessage.warning('合成任务仍在处理中，可稍后在任务中心查看')
+    } finally {
+      composeVideoPollingIds.delete(itemId)
+    }
+  }
+
   const runComposeVideos = async () => {
     if (composeVideoExporting.value) return
     const sources = selectedComposeVideoItems.value.filter(isComposeVideoReady)
@@ -2102,6 +2135,7 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
         source_item_ids: sourceItemIds,
         title: String(composeVideoTitleInput.value || '').trim() || '合成视频',
         mode: 'concat',
+        async: true,
         options: {
           order: sourceItemIds,
           clip_count: sourceItemIds.length,
@@ -2132,9 +2166,12 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
         }
         await loadHistory(createdItem.id)
         await focusCanvasItem(createdItem)
+        if (response?.status === 'processing') {
+          pollComposeVideoResult(createdItem.id)
+        }
       }
       composeVideoPanelVisible.value = false
-      ElMessage.success(response?.message || '视频已合成')
+      ElMessage.success(response?.message || '视频合成任务已提交')
     } catch (error) {
       ElMessage.error(
         error?.response?.data?.detail || error?.message || '视频合成失败'

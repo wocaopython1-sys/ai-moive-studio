@@ -423,15 +423,17 @@ class CanvasService(BaseService):
             or ""
         ).strip()
 
-    async def compose_videos(
-        self,
-        document_id: str,
-        user_id: str,
-        request: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        document = await self.get_document(document_id, user_id)
+    def _is_async_compose_request(self, request: Dict[str, Any]) -> bool:
+        value = request.get("async")
+        if value is None:
+            value = request.get("async_mode")
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _compose_requested_ids(self, request: Dict[str, Any]) -> List[str]:
         options = request.get("options") if isinstance(request.get("options"), dict) else {}
-        requested_ids = request.get("source_item_ids") or options.get("order") or []
+        requested_ids = request.get("source_item_ids") or options.get("order") or options.get("source_item_ids") or []
         ordered_ids: List[str] = []
         seen_ids = set()
         for raw_item_id in requested_ids:
@@ -440,7 +442,20 @@ class CanvasService(BaseService):
                 continue
             ordered_ids.append(item_id)
             seen_ids.add(item_id)
+        return ordered_ids
 
+    def _compose_title(self, request: Dict[str, Any]) -> str:
+        title = str(request.get("title") or request.get("prompt") or "合成视频").strip() or "合成视频"
+        return title[:200]
+
+    async def _load_video_compose_sources(
+        self,
+        document_id: str,
+        user_id: str,
+        request: Dict[str, Any],
+    ) -> Tuple[CanvasDocument, List[str], List[CanvasItem], List[str]]:
+        document = await self.get_document(document_id, user_id)
+        ordered_ids = self._compose_requested_ids(request)
         if len(ordered_ids) < 2:
             raise BusinessLogicError("至少选择 2 个视频才能合成")
         if len(ordered_ids) > 5:
@@ -469,7 +484,9 @@ class CanvasService(BaseService):
                 raise BusinessLogicError("视频节点缺少 object_key，不能合成")
             source_items.append(item)
             source_object_keys.append(object_key)
+        return document, ordered_ids, source_items, source_object_keys
 
+    async def _ensure_video_compose_files_exist(self, source_object_keys: List[str]) -> None:
         storage = await get_storage_client()
         missing_keys = []
         for object_key in source_object_keys:
@@ -478,8 +495,28 @@ class CanvasService(BaseService):
         if missing_keys:
             raise BusinessLogicError(f"视频文件不存在，不能合成: {missing_keys[0]}")
 
-        title = str(request.get("title") or "合成视频").strip() or "合成视频"
-        title = title[:200]
+    def _compose_request_payload(self, title: str, ordered_ids: List[str], options: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "provider": "local",
+            "model": "ffmpeg-concat",
+            "prompt": title,
+            "options": {
+                "mode": "concat",
+                "source_item_ids": ordered_ids,
+                "clip_count": len(ordered_ids),
+                **(options or {}),
+            },
+        }
+
+    async def _compose_video_to_storage(
+        self,
+        user_id: str,
+        title: str,
+        ordered_ids: List[str],
+        source_object_keys: List[str],
+    ) -> Tuple[str, Dict[str, Any]]:
+        storage = await get_storage_client()
+        await self._ensure_video_compose_files_exist(source_object_keys)
         final_filename = f"{title}.mp4" if not title.lower().endswith(".mp4") else title
         output_object_key = storage.generate_object_key(user_id, "compose.mp4")
 
@@ -545,16 +582,15 @@ class CanvasService(BaseService):
                     "compose_source_item_ids": ",".join(ordered_ids),
                 },
             )
+        return output_object_key, storage_info
 
-        max_right = max(float(item.position_x or 0) + float(item.width or 0) for item in source_items)
-        base_y = float(source_items[0].position_y or 0)
-        content = {
-            "result_video_object_key": output_object_key,
-            "compose_source_item_ids": ordered_ids,
-            "compose_mode": "concat",
-            "clip_count": len(source_items),
-        }
-        result_payload = {
+    def _compose_result_payload(
+        self,
+        output_object_key: str,
+        ordered_ids: List[str],
+        storage_info: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {
             "result_video_object_key": output_object_key,
             "provider": "local",
             "provider_response": {
@@ -563,8 +599,188 @@ class CanvasService(BaseService):
                 "mode": "concat",
             },
             "compose_source_item_ids": ordered_ids,
-            "clip_count": len(source_items),
+            "clip_count": len(ordered_ids),
             "storage_info": storage_info,
+        }
+
+    async def _create_compose_connections(
+        self,
+        document_id: Any,
+        source_items: List[CanvasItem],
+        final_item: CanvasItem,
+    ) -> List[CanvasConnection]:
+        existing_stmt = select(CanvasConnection).where(
+            CanvasConnection.document_id == document_id,
+            CanvasConnection.target_item_id == final_item.id,
+            CanvasConnection.source_item_id.in_([item.id for item in source_items]),
+        )
+        existing_connections = list((await self.execute(existing_stmt)).scalars().all())
+        existing_source_ids = {str(connection.source_item_id) for connection in existing_connections}
+        connections: List[CanvasConnection] = list(existing_connections)
+        for source_item in source_items:
+            if str(source_item.id) in existing_source_ids:
+                continue
+            connection = CanvasConnection(
+                document_id=document_id,
+                source_item_id=source_item.id,
+                target_item_id=final_item.id,
+                source_handle="right",
+                target_handle="left",
+            )
+            self.add(connection)
+            connections.append(connection)
+        await self.flush()
+        for connection in connections:
+            await self.refresh(connection)
+        return connections
+
+    async def prepare_video_compose(
+        self,
+        document_id: str,
+        user_id: str,
+        request: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        document, ordered_ids, source_items, source_object_keys = await self._load_video_compose_sources(document_id, user_id, request)
+        await self._ensure_video_compose_files_exist(source_object_keys)
+        options = request.get("options") if isinstance(request.get("options"), dict) else {}
+        title = self._compose_title(request)
+        max_right = max(float(item.position_x or 0) + float(item.width or 0) for item in source_items)
+        base_y = float(source_items[0].position_y or 0)
+        content = {
+            "compose_source_item_ids": ordered_ids,
+            "compose_mode": "concat",
+            "clip_count": len(source_items),
+        }
+        initial_payload = {
+            "provider": "local",
+            "provider_response": {
+                "provider": "local",
+                "tool": "ffmpeg",
+                "mode": "concat",
+            },
+            "compose_source_item_ids": ordered_ids,
+            "clip_count": len(source_items),
+            "options": options,
+        }
+        final_item = CanvasItem(
+            document_id=document.id,
+            item_type=CanvasItemType.VIDEO.value,
+            title=title,
+            position_x=max_right + 180,
+            position_y=base_y,
+            width=360,
+            height=240,
+            content_json=self._sanitize_media_content(content),
+            generation_config_json={"mode": "concat", "model": "ffmpeg"},
+            last_run_status=CanvasRunStatus.PROCESSING.value,
+            last_run_error=None,
+            last_output_json=self._sanitize_media_result_payload(initial_payload),
+        )
+        self.add(final_item)
+        await self.flush()
+        await self.refresh(final_item)
+
+        request_payload = self._compose_request_payload(
+            title,
+            ordered_ids,
+            {
+                **options,
+                "async": True,
+            },
+        )
+        generation = CanvasItemGeneration(
+            item_id=final_item.id,
+            document_id=document.id,
+            user_id=ensure_canvas_uuid(user_id),
+            generation_type=CanvasGenerationType.VIDEO.value,
+            request_payload_json=request_payload,
+            status=CanvasRunStatus.PROCESSING.value,
+            result_payload_json=self._sanitize_media_result_payload(initial_payload),
+            error_message=None,
+        )
+        self.add(generation)
+        await self.flush()
+        await self.refresh(generation)
+        await self.refresh(final_item)
+        return {
+            "status": CanvasRunStatus.PROCESSING.value,
+            "item": final_item,
+            "generation": generation,
+            "connections": [],
+            "object_key": "",
+        }
+
+    async def process_video_compose(self, generation_id: str) -> Dict[str, Any]:
+        generation = await self.get_generation(generation_id)
+        final_item = await self.get_item_by_id(str(generation.item_id))
+        request = generation.request_payload_json or {}
+        try:
+            await self.update_generation(generation, final_item, CanvasRunStatus.PROCESSING.value)
+            await self.commit()
+            document, ordered_ids, source_items, source_object_keys = await self._load_video_compose_sources(
+                str(generation.document_id),
+                str(generation.user_id),
+                request,
+            )
+            title = self._compose_title(request)
+            output_object_key, storage_info = await self._compose_video_to_storage(
+                str(generation.user_id),
+                title,
+                ordered_ids,
+                source_object_keys,
+            )
+            result_payload = self._compose_result_payload(output_object_key, ordered_ids, storage_info)
+            await self.update_generation(
+                generation,
+                final_item,
+                CanvasRunStatus.COMPLETED.value,
+                result_payload=result_payload,
+                error_message=None,
+            )
+            connections = await self._create_compose_connections(document.id, source_items, final_item)
+            await self.commit()
+            return {
+                "generation_id": generation_id,
+                "status": CanvasRunStatus.COMPLETED.value,
+                "item_id": str(final_item.id),
+                "result_video_object_key": output_object_key,
+                "created_connection_ids": [str(connection.id) for connection in connections],
+            }
+        except Exception as exc:
+            await self.update_generation(
+                generation,
+                final_item,
+                CanvasRunStatus.FAILED.value,
+                error_message=str(exc),
+            )
+            await self.commit()
+            logger.exception("Canvas video compose failed: %s", generation_id)
+            raise
+
+    async def compose_videos(
+        self,
+        document_id: str,
+        user_id: str,
+        request: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        document, ordered_ids, source_items, source_object_keys = await self._load_video_compose_sources(document_id, user_id, request)
+        options = request.get("options") if isinstance(request.get("options"), dict) else {}
+        title = self._compose_title(request)
+        output_object_key, storage_info = await self._compose_video_to_storage(
+            user_id,
+            title,
+            ordered_ids,
+            source_object_keys,
+        )
+        result_payload = self._compose_result_payload(output_object_key, ordered_ids, storage_info)
+
+        max_right = max(float(item.position_x or 0) + float(item.width or 0) for item in source_items)
+        base_y = float(source_items[0].position_y or 0)
+        content = {
+            "result_video_object_key": output_object_key,
+            "compose_source_item_ids": ordered_ids,
+            "compose_mode": "concat",
+            "clip_count": len(source_items),
         }
         final_item = CanvasItem(
             document_id=document.id,
@@ -584,45 +800,21 @@ class CanvasService(BaseService):
         await self.flush()
         await self.refresh(final_item)
 
-        request_payload = {
-            "provider": "local",
-            "model": "ffmpeg-concat",
-            "prompt": title,
-            "options": {
-                "mode": "concat",
-                "source_item_ids": ordered_ids,
-                "clip_count": len(source_items),
-                **options,
-            },
-        }
         generation = CanvasItemGeneration(
             item_id=final_item.id,
             document_id=document.id,
             user_id=ensure_canvas_uuid(user_id),
             generation_type=CanvasGenerationType.VIDEO.value,
-            request_payload_json=request_payload,
+            request_payload_json=self._compose_request_payload(title, ordered_ids, options),
             status=CanvasRunStatus.COMPLETED.value,
             result_payload_json=self._sanitize_media_result_payload(result_payload),
             error_message=None,
         )
         self.add(generation)
-
-        connections: List[CanvasConnection] = []
-        for source_item in source_items:
-            connection = CanvasConnection(
-                document_id=document.id,
-                source_item_id=source_item.id,
-                target_item_id=final_item.id,
-                source_handle="right",
-                target_handle="left",
-            )
-            self.add(connection)
-            connections.append(connection)
+        connections = await self._create_compose_connections(document.id, source_items, final_item)
 
         await self.flush()
         await self.refresh(generation)
-        for connection in connections:
-            await self.refresh(connection)
         await self.refresh(final_item)
 
         return {

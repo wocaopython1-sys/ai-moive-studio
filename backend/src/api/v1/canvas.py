@@ -41,7 +41,7 @@ from src.services.canvas import (
     CanvasService,
     extract_object_key_from_media_url,
 )
-from src.tasks.canvas import generate_canvas_image, generate_canvas_text, generate_canvas_video
+from src.tasks.canvas import compose_canvas_video, generate_canvas_image, generate_canvas_text, generate_canvas_video
 from src.utils.media_urls import media_url_for_object_key
 
 router = APIRouter()
@@ -163,6 +163,10 @@ def dispatch_canvas_image_generation(generation_id: str) -> str:
 
 def dispatch_canvas_video_generation(generation_id: str) -> str:
     return generate_canvas_video.delay(generation_id).id
+
+
+def dispatch_canvas_video_compose(generation_id: str) -> str:
+    return compose_canvas_video.delay(generation_id).id
 
 
 @router.get("/canvas-model-catalog")
@@ -404,7 +408,32 @@ async def compose_canvas_videos(
     db: AsyncSession = Depends(get_db),
 ):
     service = CanvasService(db)
-    result = await service.compose_videos(document_id, str(current_user.id), payload.model_dump())
+    request_payload = payload.model_dump(exclude_none=True)
+    if request_payload.get("async_mode"):
+        result = await service.prepare_video_compose(document_id, str(current_user.id), request_payload)
+        await db.commit()
+        item = result["item"]
+        generation = result["generation"]
+        task_id = dispatch_canvas_video_compose(str(generation.id))
+        generation_service = CanvasGenerationService(db)
+        item, generation = await generation_service.attach_task(str(generation.id), task_id)
+        await db.commit()
+        return CanvasComposeVideosResponse(
+            success=True,
+            message="视频合成任务已提交",
+            status=result["status"],
+            created_item=await build_item_payload(item),
+            generation=await build_generation_response(generation),
+            generation_id=generation.id,
+            task_id=task_id,
+            created_connections=[],
+            object_key="",
+            preview_url="",
+            stream_url="",
+            download_url="",
+        )
+
+    result = await service.compose_videos(document_id, str(current_user.id), request_payload)
     await db.commit()
     item = result["item"]
     generation = result["generation"]
@@ -415,6 +444,7 @@ async def compose_canvas_videos(
         status=result["status"],
         created_item=await build_item_payload(item),
         generation=await build_generation_response(generation),
+        generation_id=generation.id,
         created_connections=[
             CanvasConnectionPayload(
                 id=connection.id,

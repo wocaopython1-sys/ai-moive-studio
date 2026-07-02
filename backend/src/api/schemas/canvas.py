@@ -175,6 +175,7 @@ class CanvasComposeVideosRequest(BaseModel):
     source_item_ids: List[UUID] = Field(default_factory=list)
     title: str = Field("合成视频", min_length=1, max_length=200)
     mode: str = Field("concat")
+    async_mode: bool = Field(False, alias="async")
     options: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -182,11 +183,13 @@ class CanvasComposeVideosResponse(SuccessResponse):
     status: str
     created_item: CanvasItemPayload
     generation: CanvasGenerationResponse
+    generation_id: Optional[UUID] = None
+    task_id: Optional[str] = None
     created_connections: List[CanvasConnectionPayload] = Field(default_factory=list)
-    object_key: str
-    preview_url: str
-    stream_url: str
-    download_url: str
+    object_key: str = ""
+    preview_url: str = ""
+    stream_url: str = ""
+    download_url: str = ""
 
 
 class CanvasApplyGenerationResponse(SuccessResponse):

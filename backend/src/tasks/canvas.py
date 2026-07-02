@@ -39,3 +39,14 @@ async def generate_canvas_video(db_session, self, generation_id: str):
     result = await service.process_video_generation(generation_id)
     logger.info("Celery任务成功: canvas.generate_video (generation_id=%s)", generation_id)
     return result
+
+@celery_app.task(bind=True, max_retries=0, name="canvas.compose_video")
+@async_task_decorator
+async def compose_canvas_video(db_session, self, generation_id: str):
+    from src.services.canvas import CanvasService
+
+    logger.info("Celery任务开始: canvas.compose_video (generation_id=%s)", generation_id)
+    service = CanvasService(db_session)
+    result = await service.process_video_compose(generation_id)
+    logger.info("Celery任务成功: canvas.compose_video (generation_id=%s)", generation_id)
+    return result
