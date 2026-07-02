@@ -270,6 +270,13 @@ const formatTaskParams = (task) => {
   const mode = params.mode
   const clipCount = params.clip_count
   const sourceVideos = params.source_videos
+  const workflowId = params.workflow_id
+  const workflowLabel = params.workflow_label
+  const workflowStage = params.workflow_stage
+  const workflowStageIndex = params.workflow_stage_index
+  const workflowPrompts = params.workflow_prompts
+  const workflowImages = params.workflow_images
+  const workflowVideos = params.workflow_videos
   if (size) parts.push(`尺寸 ${size}`)
   if (ratio) parts.push(`比例 ${ratio}`)
   if (count) parts.push(`数量 ${count}`)
@@ -280,6 +287,15 @@ const formatTaskParams = (task) => {
   if (params.reference_images) parts.push(`参考图 ${params.reference_images}`)
   if (batchLabel) parts.push(`批量 ${batchLabel}`)
   if (batchIndex && batchTotal) parts.push(`批次 ${batchIndex}/${batchTotal}`)
+  if (workflowLabel || workflowId) {
+    parts.push(`工作流 ${workflowLabel || String(workflowId).slice(0, 8)}`)
+  }
+  if (workflowStage) {
+    parts.push(`阶段 ${workflowStageIndex ? `${workflowStageIndex}-` : ''}${workflowStage}`)
+  }
+  if (workflowPrompts) parts.push(`Prompt ${workflowPrompts}`)
+  if (workflowImages) parts.push(`图片 ${workflowImages}`)
+  if (workflowVideos) parts.push(`视频 ${workflowVideos}`)
   return parts.join(' / ')
 }
 

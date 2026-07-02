@@ -1135,12 +1135,28 @@ class CanvasTaskHistoryService(BaseService):
             "duration_seconds",
             "mode",
             "clip_count",
+            "batch_label",
+            "batch_id",
+            "batch_index",
+            "batch_total",
+            "workflow_id",
+            "workflow_label",
+            "workflow_stage",
+            "workflow_stage_index",
+            "source_prompt_item_id",
+            "source_image_item_id",
         ):
             value = options.get(key)
             if value not in (None, "", []):
                 summary[key] = value
         if options.get("source_item_ids"):
             summary["source_videos"] = len(options.get("source_item_ids") or [])
+        if options.get("workflow_prompt_item_ids"):
+            summary["workflow_prompts"] = len(options.get("workflow_prompt_item_ids") or [])
+        if options.get("workflow_image_item_ids"):
+            summary["workflow_images"] = len(options.get("workflow_image_item_ids") or [])
+        if options.get("workflow_video_item_ids"):
+            summary["workflow_videos"] = len(options.get("workflow_video_item_ids") or [])
         if options.get("reference_image_urls"):
             summary["reference_images"] = len(options.get("reference_image_urls") or [])
         if options.get("reference_image_object_keys"):

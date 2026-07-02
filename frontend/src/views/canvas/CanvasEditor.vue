@@ -191,6 +191,17 @@
         合成视频
       </button>
 
+      <button
+        v-if="workflowPromptItems.length"
+        class="canvas-batch-launcher canvas-batch-launcher--workflow"
+        type="button"
+        data-testid="open-workflow-panel"
+        :disabled="workflowRunning"
+        @click="openWorkflowPanel"
+      >
+        分镜成片
+      </button>
+
       <aside
         v-if="batchImagePanelVisible"
         class="canvas-batch-panel"
@@ -540,6 +551,111 @@
       </aside>
 
       <aside
+        v-if="workflowPanelVisible"
+        class="canvas-batch-panel canvas-batch-panel--workflow"
+        data-testid="workflow-panel"
+      >
+        <header class="canvas-batch-panel__header">
+          <div>
+            <h3>分镜成片</h3>
+            <p>{{ selectedWorkflowPromptItems.length }} / {{ workflowPromptItems.length }} 个 Prompt</p>
+          </div>
+          <button
+            class="canvas-batch-panel__close"
+            type="button"
+            aria-label="关闭分镜成片"
+            :disabled="workflowRunning"
+            @click="workflowPanelVisible = false"
+          >
+            ×
+          </button>
+        </header>
+
+        <div v-if="!workflowPromptItems.length" class="canvas-batch-panel__state">
+          当前 Canvas 没有可用 Prompt 节点
+        </div>
+        <div v-else class="canvas-batch-panel__body">
+          <label
+            v-for="item in workflowPromptItems"
+            :key="item.id"
+            class="canvas-batch-prompt"
+            :class="{ 'is-disabled': !textPromptForItem(item) }"
+          >
+            <input
+              type="checkbox"
+              :checked="workflowSelectedPromptIds.includes(item.id)"
+              :disabled="workflowRunning || !textPromptForItem(item)"
+              @change="toggleWorkflowPrompt(item.id)"
+            />
+            <span>
+              <strong>{{ batchPromptTitle(item) }}</strong>
+              <small>{{ workflowPromptPreview(item) }}</small>
+            </span>
+            <em>{{ workflowPromptStateText(item) }}</em>
+          </label>
+        </div>
+
+        <div class="canvas-batch-panel__options canvas-batch-panel__options--workflow">
+          <label class="canvas-batch-panel__option--wide">
+            标题
+            <input
+              v-model="workflowTitleInput"
+              :disabled="workflowRunning"
+              placeholder="分镜成片"
+            />
+          </label>
+          <label>
+            模式
+            <select
+              v-model="workflowMode"
+              :disabled="workflowRunning"
+            >
+              <option value="reuse">复用已有结果</option>
+              <option value="fill_missing">补齐缺失项</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="canvas-workflow-steps">
+          <span
+            v-for="step in workflowSteps"
+            :key="step.key"
+            :data-status="step.status"
+          >
+            {{ step.label }}：{{ batchStatusText(step.status) }}
+          </span>
+        </div>
+
+        <div class="canvas-batch-panel__actions">
+          <button
+            class="canvas-batch-btn"
+            type="button"
+            :disabled="workflowRunning"
+            @click="selectCurrentTextNodesForWorkflow"
+          >
+            选中 Prompt
+          </button>
+          <button
+            class="canvas-batch-btn"
+            type="button"
+            :disabled="!selectedWorkflowPromptItems.length || workflowRunning"
+            @click="runStoryboardWorkflow({ dryRun: true })"
+          >
+            检查链路
+          </button>
+          <button
+            class="canvas-batch-btn canvas-batch-btn--primary"
+            type="button"
+            data-testid="run-storyboard-workflow"
+            :disabled="selectedWorkflowPromptItems.length !== 2 || workflowRunning"
+            @click="runStoryboardWorkflow()"
+          >
+            {{ workflowRunning ? '运行中' : '生成成片' }}
+          </button>
+        </div>
+      </aside>
+
+      <aside
         v-if="assetDrawerVisible"
         class="canvas-asset-panel"
         data-testid="canvas-asset-panel"
@@ -857,6 +973,20 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   const composeSelectedVideoIds = ref([])
   const composeVideoTitleInput = ref('合成视频')
   const composeVideoPollingIds = new Set()
+  const workflowPanelVisible = ref(false)
+  const workflowRunning = ref(false)
+  const workflowSelectedPromptIds = ref([])
+  const workflowMode = ref('reuse')
+  const workflowTitleInput = ref('分镜成片')
+  const workflowStatusByPrompt = reactive({})
+  const workflowStageStatus = reactive({
+    prepare: 'pending',
+    image: 'pending',
+    video: 'pending',
+    compose: 'pending',
+    done: 'pending'
+  })
+  const workflowLastRun = ref(null)
   const handledEntryModeKeys = new Set()
 
   const entryModeConfigs = {
@@ -1251,6 +1381,18 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       .map((itemId) => itemById.get(itemId))
       .filter(Boolean)
   })
+  const workflowPromptItems = computed(() => batchPromptItems.value)
+  const selectedWorkflowPromptItems = computed(() => {
+    const selectedIdSet = new Set(workflowSelectedPromptIds.value)
+    return workflowPromptItems.value.filter((item) => selectedIdSet.has(item.id))
+  })
+  const workflowSteps = computed(() => [
+    { key: 'prepare', label: '准备 Prompt', status: workflowStageStatus.prepare },
+    { key: 'image', label: '图片准备', status: workflowStageStatus.image },
+    { key: 'video', label: '视频准备', status: workflowStageStatus.video },
+    { key: 'compose', label: '成片合成', status: workflowStageStatus.compose },
+    { key: 'done', label: '完成', status: workflowStageStatus.done }
+  ])
 
   const buildDefaultGenerationConfig = (type) => {
     if (type !== 'image' && type !== 'video') {
@@ -1506,6 +1648,414 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       selectCurrentVideoNodesForCompose()
     }
     composeVideoPanelVisible.value = true
+  }
+
+  const createWorkflowRunId = () =>
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `workflow-${Date.now()}`
+
+  const resetWorkflowStatus = () => {
+    Object.keys(workflowStatusByPrompt).forEach((key) => {
+      delete workflowStatusByPrompt[key]
+    })
+    Object.keys(workflowStageStatus).forEach((key) => {
+      workflowStageStatus[key] = 'pending'
+    })
+  }
+
+  const setWorkflowStage = (stage, status) => {
+    workflowStageStatus[stage] = status
+  }
+
+  const workflowPromptPreview = (item) =>
+    batchPromptPreview(item).slice(0, 72) || '暂无 Prompt 内容'
+
+  const findDirectTargetItems = (sourceItemId, itemType) =>
+    connections.value
+      .filter((connection) => connection.source_item_id === sourceItemId)
+      .map((connection) =>
+        items.value.find((item) => item.id === connection.target_item_id)
+      )
+      .filter((item) => item?.item_type === itemType)
+
+  const findCompletedImageForPrompt = (promptItem) =>
+    findDirectTargetItems(promptItem?.id, 'image').find(
+      (item) => item.last_run_status === 'completed' && isBatchVideoImageReady(item)
+    ) || null
+
+  const findCompletedVideoForImage = (imageItem) =>
+    findDirectTargetItems(imageItem?.id, 'video').find(isComposeVideoReady) || null
+
+  const buildWorkflowPathForPrompt = (promptItem) => {
+    const prompt = textPromptForItem(promptItem)
+    const image = findCompletedImageForPrompt(promptItem)
+    const video = image ? findCompletedVideoForImage(image) : null
+    return {
+      promptItem,
+      prompt,
+      image,
+      video,
+      missingImage: Boolean(prompt && !image),
+      missingVideo: Boolean(prompt && image && !video)
+    }
+  }
+
+  const workflowPromptStateText = (item) => {
+    if (workflowStatusByPrompt[item.id]) {
+      return batchStatusText(workflowStatusByPrompt[item.id])
+    }
+    const path = buildWorkflowPathForPrompt(item)
+    if (!path.prompt) return '无 Prompt'
+    if (path.missingImage) return '缺图片'
+    if (path.missingVideo) return '缺视频'
+    return '可成片'
+  }
+
+  const toggleWorkflowPrompt = (itemId) => {
+    const item = items.value.find((entry) => entry.id === itemId)
+    if (!textPromptForItem(item)) {
+      ElMessage.warning('该 Prompt 节点没有可用文本')
+      return
+    }
+    const selected = [...workflowSelectedPromptIds.value]
+    const index = selected.indexOf(itemId)
+    if (index >= 0) {
+      selected.splice(index, 1)
+    } else {
+      if (selected.length >= 2) {
+        ElMessage.warning('阶段 2I 一次只选择 2 个 Prompt')
+        return
+      }
+      selected.push(itemId)
+    }
+    workflowSelectedPromptIds.value = selected
+  }
+
+  const selectCurrentTextNodesForWorkflow = () => {
+    const selectedTextIds = (selectedItemIds.value || []).filter((itemId) =>
+      items.value.some(
+        (item) => item.id === itemId && item.item_type === 'text' && textPromptForItem(item)
+      )
+    )
+    workflowSelectedPromptIds.value = (selectedTextIds.length
+      ? selectedTextIds
+      : workflowPromptItems.value.filter(textPromptForItem).slice(0, 2).map((item) => item.id)
+    ).slice(0, 2)
+  }
+
+  const openWorkflowPanel = () => {
+    if (!workflowSelectedPromptIds.value.length) {
+      selectCurrentTextNodesForWorkflow()
+    }
+    workflowPanelVisible.value = true
+  }
+
+  const upsertCanvasItemFromResponse = (createdItem) => {
+    if (!createdItem?.id) return null
+    const exists = items.value.some((item) => item.id === createdItem.id)
+    const patch = {
+      content: createdItem.content || {},
+      generation_config: createdItem.generation_config || {},
+      last_run_status: createdItem.last_run_status,
+      last_run_error: createdItem.last_run_error,
+      last_output: createdItem.last_output || {},
+      is_persisted: true
+    }
+    if (exists) {
+      updateItem(createdItem.id, patch)
+      return items.value.find((item) => item.id === createdItem.id) || createdItem
+    }
+    const nextItem = {
+      ...createdItem,
+      ...patch
+    }
+    items.value.push(nextItem)
+    return nextItem
+  }
+
+  const applyWorkflowGenerationResponse = async (response = {}) => {
+    if (response?.item?.id) {
+      upsertCanvasItemFromResponse(response.item)
+      await loadHistory(response.item.id)
+    }
+    await mergeCreatedItemsFromGeneration(response)
+    return items.value.find((item) => item.id === response?.item?.id) || response?.item || null
+  }
+
+  const buildWorkflowImagePayload = (imageNode, promptItem, workflowId, index, total) => {
+    const payload = buildGenerationPayload(imageNode)
+    payload.options = {
+      ...(payload.options || {}),
+      batch_id: workflowId,
+      batch_index: index + 1,
+      batch_total: total,
+      batch_label: '一键成片图片',
+      workflow_id: workflowId,
+      workflow_label: '分镜成片',
+      workflow_stage: 'image',
+      workflow_stage_index: 1,
+      source_item_id: promptItem.id,
+      source_prompt_item_id: promptItem.id
+    }
+    return payload
+  }
+
+  const buildWorkflowVideoPayload = (videoNode, imageItem, promptItem, workflowId, index, total) => {
+    const payload = buildGenerationPayload(videoNode)
+    payload.options = {
+      ...(payload.options || {}),
+      batch_id: workflowId,
+      batch_index: index + 1,
+      batch_total: total,
+      batch_label: '一键成片视频',
+      workflow_id: workflowId,
+      workflow_label: '分镜成片',
+      workflow_stage: 'video',
+      workflow_stage_index: 2,
+      source_item_id: imageItem.id,
+      source_prompt_item_id: promptItem.id,
+      source_image_item_id: imageItem.id
+    }
+    return payload
+  }
+
+  const createWorkflowImageForPrompt = async (promptItem, workflowId, index, total) => {
+    if (!defaultImageModel.value && !batchImageSettings.model) {
+      throw new Error('没有可用图片模型')
+    }
+    const prompt = textPromptForItem(promptItem)
+    const imageNode = await createLinkedNodeFromItem(promptItem, 'image', {
+      title: `工作流图片 ${index + 1}`,
+      position_x: promptItem.position_x + promptItem.width + 140,
+      position_y: promptItem.position_y + index * 28,
+      content: {
+        prompt,
+        promptTokens: [{ type: 'text', text: prompt }],
+        aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+        imageSize: batchImageSettings.imageSize || DEFAULT_IMAGE_SIZE,
+        imageCount: 1,
+        workflow_id: workflowId,
+        workflow_stage: 'image',
+        workflow_stage_index: 1,
+        source_prompt_item_id: promptItem.id
+      },
+      generation_config: {
+        api_key_id: defaultImageApiKeyId.value,
+        model: batchImageSettings.model || defaultImageModel.value
+      }
+    })
+    if (!imageNode?.id) {
+      throw new Error('图片节点创建失败')
+    }
+    const response = await generate(
+      imageNode,
+      buildWorkflowImagePayload(imageNode, promptItem, workflowId, index, total)
+    )
+    return await applyWorkflowGenerationResponse(response)
+  }
+
+  const createWorkflowVideoForImage = async (imageItem, promptItem, workflowId, index, total) => {
+    const model = batchVideoSettings.model || defaultVideoModel.value
+    if (!model) {
+      throw new Error('没有可用视频模型')
+    }
+    const prompt = String(
+      batchVideoSettings.prompt ||
+        promptItem?.content?.videoPrompt ||
+        promptItem?.content?.prompt ||
+        '镜头缓慢推进，画面轻微动态，保持主体一致。'
+    ).trim()
+    const aspectRatio = normalizeVideoAspectRatio(
+      model,
+      batchVideoSettings.aspectRatio || DEFAULT_ASPECT_RATIO
+    )
+    const durationSeconds = Number(
+      batchVideoSettings.durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS
+    )
+    const videoNode = await createLinkedNodeFromItem(imageItem, 'video', {
+      title: `工作流视频 ${index + 1}`,
+      position_x: imageItem.position_x + imageItem.width + 160,
+      position_y: imageItem.position_y + index * 36,
+      content: {
+        prompt,
+        promptTokens: [
+          buildMentionTokenForItem(imageItem),
+          { type: 'text', text: ` ${prompt}` }
+        ],
+        workflow_id: workflowId,
+        workflow_stage: 'video',
+        workflow_stage_index: 2,
+        source_prompt_item_id: promptItem.id,
+        source_image_item_id: imageItem.id
+      },
+      generation_config: {
+        api_key_id: defaultVideoApiKeyId.value,
+        model,
+        aspectRatio,
+        durationSeconds
+      }
+    })
+    if (!videoNode?.id) {
+      throw new Error('视频节点创建失败')
+    }
+    const response = await generate(
+      videoNode,
+      buildWorkflowVideoPayload(videoNode, imageItem, promptItem, workflowId, index, total)
+    )
+    return await applyWorkflowGenerationResponse(response)
+  }
+
+  const runStoryboardWorkflow = async ({ dryRun = false } = {}) => {
+    if (workflowRunning.value) return
+    const promptItems = selectedWorkflowPromptItems.value.filter(textPromptForItem)
+    if (promptItems.length !== 2) {
+      ElMessage.warning('阶段 2I 请选择 2 个 Prompt 节点')
+      return
+    }
+
+    resetWorkflowStatus()
+    const initialPaths = promptItems.map(buildWorkflowPathForPrompt)
+    if (dryRun) {
+      setWorkflowStage('prepare', 'completed')
+      setWorkflowStage(
+        'image',
+        initialPaths.some((path) => path.missingImage) ? 'failed' : 'completed'
+      )
+      setWorkflowStage(
+        'video',
+        initialPaths.some((path) => path.missingVideo || path.missingImage) ? 'failed' : 'completed'
+      )
+      setWorkflowStage(
+        'compose',
+        initialPaths.every((path) => path.video) ? 'pending' : 'failed'
+      )
+      promptItems.forEach((item, index) => {
+        workflowStatusByPrompt[item.id] = initialPaths[index].video ? 'completed' : 'failed'
+      })
+      if (initialPaths.every((path) => path.video)) {
+        ElMessage.success('链路检查通过，可直接合成')
+      } else {
+        ElMessage.warning('链路缺少图片或视频，请先补齐或切换补齐缺失项')
+      }
+      return
+    }
+
+    workflowRunning.value = true
+    const workflowId = createWorkflowRunId()
+    workflowLastRun.value = {
+      workflow_id: workflowId,
+      prompt_item_ids: promptItems.map((item) => item.id),
+      started_at: new Date().toISOString()
+    }
+    let composeSubmitted = false
+
+    try {
+      syncSelectedStudioDraft()
+      if (dirty.value) {
+        await save()
+      }
+
+      setWorkflowStage('prepare', 'running')
+      promptItems.forEach((item) => {
+        workflowStatusByPrompt[item.id] = 'running'
+      })
+      setWorkflowStage('prepare', 'completed')
+
+      setWorkflowStage('image', 'running')
+      const imageItems = []
+      for (const [index, promptItem] of promptItems.entries()) {
+        let imageItem = findCompletedImageForPrompt(promptItem)
+        if (!imageItem) {
+          if (workflowMode.value !== 'fill_missing') {
+            throw new Error(`Prompt ${index + 1} 缺少 completed 图片`)
+          }
+          imageItem = await createWorkflowImageForPrompt(promptItem, workflowId, index, promptItems.length)
+        }
+        if (!imageItem || !isBatchVideoImageReady(imageItem)) {
+          throw new Error(`Prompt ${index + 1} 图片不可用`)
+        }
+        imageItems.push(imageItem)
+      }
+      setWorkflowStage('image', 'completed')
+
+      setWorkflowStage('video', 'running')
+      const videoItems = []
+      for (const [index, imageItem] of imageItems.entries()) {
+        const promptItem = promptItems[index]
+        let videoItem = findCompletedVideoForImage(imageItem)
+        if (!videoItem) {
+          if (workflowMode.value !== 'fill_missing') {
+            throw new Error(`Prompt ${index + 1} 缺少 completed 视频`)
+          }
+          videoItem = await createWorkflowVideoForImage(imageItem, promptItem, workflowId, index, imageItems.length)
+        }
+        if (!videoItem || !isComposeVideoReady(videoItem)) {
+          throw new Error(`Prompt ${index + 1} 视频不可用`)
+        }
+        videoItems.push(videoItem)
+        workflowStatusByPrompt[promptItem.id] = 'completed'
+      }
+      setWorkflowStage('video', 'completed')
+
+      setWorkflowStage('compose', 'running')
+      const sourceItemIds = videoItems.map((item) => item.id)
+      const response = await canvasService.composeVideos(document.value.id, {
+        source_item_ids: sourceItemIds,
+        title: String(workflowTitleInput.value || '').trim() || '分镜成片',
+        mode: 'concat',
+        async: true,
+        options: {
+          order: sourceItemIds,
+          clip_count: sourceItemIds.length,
+          batch_label: '一键成片',
+          workflow_id: workflowId,
+          workflow_label: '分镜成片',
+          workflow_stage: 'compose',
+          workflow_stage_index: 3,
+          workflow_prompt_item_ids: promptItems.map((item) => item.id),
+          workflow_image_item_ids: imageItems.map((item) => item.id),
+          workflow_video_item_ids: sourceItemIds
+        }
+      })
+      mergeConnections(response?.created_connections || [])
+      const createdItem = upsertCanvasItemFromResponse(response?.created_item)
+      if (createdItem?.id) {
+        await loadHistory(createdItem.id)
+        await focusCanvasItem(createdItem)
+        if (response?.status === 'processing') {
+          composeSubmitted = true
+          pollComposeVideoResult(createdItem.id, { workflowId })
+        } else if (response?.status === 'completed') {
+          setWorkflowStage('compose', 'completed')
+          setWorkflowStage('done', 'completed')
+        }
+      }
+      workflowPanelVisible.value = false
+      ElMessage.success(response?.message || '分镜成片任务已提交')
+    } catch (error) {
+      const failedStage = workflowStageStatus.image === 'running'
+        ? 'image'
+        : workflowStageStatus.video === 'running'
+          ? 'video'
+          : workflowStageStatus.compose === 'running'
+            ? 'compose'
+            : 'done'
+      setWorkflowStage(failedStage, 'failed')
+      setWorkflowStage('done', 'failed')
+      promptItems.forEach((item) => {
+        if (workflowStatusByPrompt[item.id] === 'running') {
+          workflowStatusByPrompt[item.id] = 'failed'
+        }
+      })
+      ElMessage.error(
+        error?.response?.data?.detail || error?.message || '分镜成片流程失败'
+      )
+    } finally {
+      if (!composeSubmitted) {
+        workflowRunning.value = false
+      }
+    }
   }
 
   const relationNodeLabel = (item) => {
@@ -2087,7 +2637,7 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     return items.value.find((item) => item.id === itemId) || null
   }
 
-  const pollComposeVideoResult = async (itemId) => {
+  const pollComposeVideoResult = async (itemId, context = {}) => {
     if (!itemId || composeVideoPollingIds.has(itemId)) return
     composeVideoPollingIds.add(itemId)
     const maxAttempts = 120
@@ -2099,10 +2649,18 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
         if (item.last_run_status === 'completed') {
           await loadHistory(item.id)
           await focusCanvasItem(item)
+          if (context.workflowId && workflowLastRun.value?.workflow_id === context.workflowId) {
+            setWorkflowStage('compose', 'completed')
+            setWorkflowStage('done', 'completed')
+          }
           ElMessage.success('视频合成已完成')
           return
         }
         if (item.last_run_status === 'failed') {
+          if (context.workflowId && workflowLastRun.value?.workflow_id === context.workflowId) {
+            setWorkflowStage('compose', 'failed')
+            setWorkflowStage('done', 'failed')
+          }
           ElMessage.error(item.last_run_error || '视频合成失败')
           return
         }
@@ -2110,6 +2668,9 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       ElMessage.warning('合成任务仍在处理中，可稍后在任务中心查看')
     } finally {
       composeVideoPollingIds.delete(itemId)
+      if (context.workflowId && workflowLastRun.value?.workflow_id === context.workflowId) {
+        workflowRunning.value = false
+      }
     }
   }
 
@@ -3959,6 +4520,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     left: 348px;
   }
 
+  .canvas-batch-launcher--workflow {
+    left: 478px;
+  }
+
   .canvas-batch-panel {
     position: absolute;
     left: 88px;
@@ -3982,6 +4547,11 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   .canvas-batch-panel--compose {
     left: 348px;
     width: min(520px, calc(100vw - 388px));
+  }
+
+  .canvas-batch-panel--workflow {
+    left: 478px;
+    width: min(560px, calc(100vw - 518px));
   }
 
   .canvas-batch-panel__header {
@@ -4136,6 +4706,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     grid-template-columns: minmax(0, 1fr) 120px;
   }
 
+  .canvas-batch-panel__options--workflow {
+    grid-template-columns: minmax(0, 1fr) 150px;
+  }
+
   .canvas-batch-panel__option--wide {
     min-width: 0;
   }
@@ -4164,6 +4738,52 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     justify-content: flex-end;
     gap: 8px;
     padding: 0 12px 12px;
+  }
+
+  .canvas-workflow-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 12px 12px;
+  }
+
+  .canvas-workflow-steps span {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background: #eef2f7;
+    color: #52627d;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .canvas-workflow-steps span[data-status='running'] {
+    background: #edf3ff;
+    color: #1c55e6;
+  }
+
+  .canvas-workflow-steps span[data-status='completed'] {
+    background: #edf8f2;
+    color: #19734d;
+  }
+
+  .canvas-workflow-steps span[data-status='failed'] {
+    background: #fff0f0;
+    color: #c03535;
+  }
+
+  @media (max-width: 980px) {
+    .canvas-batch-launcher--workflow {
+      left: 88px;
+      top: 64px;
+    }
+
+    .canvas-batch-panel--workflow {
+      left: 88px;
+      width: min(560px, calc(100% - 132px));
+    }
   }
 
   .canvas-batch-btn {
@@ -4458,6 +5078,17 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   }
 
   @media (max-width: 720px) {
+    .canvas-batch-launcher--workflow {
+      left: 12px;
+      top: 148px;
+    }
+
+    .canvas-batch-panel--workflow {
+      left: 12px;
+      right: 12px;
+      width: auto;
+    }
+
     .canvas-asset-panel {
       top: 72px;
       right: 12px;
