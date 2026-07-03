@@ -218,6 +218,64 @@ const hasCanvasResultMedia = (item) => {
 const defaultTranslate = (_key, fallback) => fallback
 const normalizeRunStatus = (value) => String(value || '').trim().toLowerCase()
 
+const workflowSourcesFromItem = (item) => [
+  item?.content || {},
+  item?.last_output || {},
+  item?.last_output?.options || {},
+  item?.last_output?.request_payload?.options || {},
+  item?.last_output?.provider_response || {},
+  item?.generation_config || {},
+  item?.generation_config?.options || {}
+]
+
+const firstWorkflowValue = (item, key) => {
+  for (const source of workflowSourcesFromItem(item)) {
+    const value = source?.[key]
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return value
+    }
+  }
+  return undefined
+}
+
+const truthyWorkflowFlag = (value) => {
+  if (value === true) {
+    return true
+  }
+  const normalized = String(value || '').trim().toLowerCase()
+  return ['true', '1', 'yes'].includes(normalized)
+}
+
+const hasListLikeValue = (value) => {
+  if (Array.isArray(value)) {
+    return value.length > 0
+  }
+  return String(value || '').trim() !== ''
+}
+
+export const isCanvasWorkflowFillMissingItem = (item) => {
+  const workflowMode = String(firstWorkflowValue(item, 'workflow_mode') || '').trim().toLowerCase()
+  const workflowAction = String(firstWorkflowValue(item, 'workflow_action') || '').trim().toLowerCase()
+  return (
+    truthyWorkflowFlag(firstWorkflowValue(item, 'fill_missing')) ||
+    workflowMode === 'fill_missing' ||
+    workflowAction.includes('fill_missing') ||
+    workflowAction.includes('missing')
+  )
+}
+
+export const isCanvasFinalVideoItem = (item) => {
+  if (item?.item_type !== 'video') {
+    return false
+  }
+
+  return (
+    firstWorkflowValue(item, 'compose_mode') === 'concat' ||
+    hasListLikeValue(firstWorkflowValue(item, 'compose_source_item_ids')) ||
+    firstWorkflowValue(item, 'tool') === 'ffmpeg'
+  )
+}
+
 const summarizeErrorMessage = (value, t = defaultTranslate) => {
   const raw = String(value || '').trim()
   if (!raw) {
@@ -259,12 +317,22 @@ export const resolveCanvasRunStatusMeta = (item, t = defaultTranslate) => {
   const transientStatusIssue = lastOutput?.transient_status_issue === true
   const errorMessage = summarizeErrorMessage(item?.last_run_error || lastOutput?.status_fetch_error || '', t)
   const hasMedia = hasCanvasResultMedia(item)
+  const fillMissing = isCanvasWorkflowFillMissingItem(item)
+  const finalVideo = isCanvasFinalVideoItem(item)
 
   if (transientStatusIssue) {
     return {
       tone: 'warning',
       label: t('canvas.video_status_retrying_label', '状态同步中'),
       detail: t('canvas.video_status_retrying_detail', '任务仍在运行，正在重试获取最新状态。')
+    }
+  }
+
+  if (status === 'failed' && fillMissing) {
+    return {
+      tone: 'error',
+      label: t('canvas.workflow_fill_missing_failed_label', '补齐失败'),
+      detail: errorMessage || t('canvas.workflow_fill_missing_failed_detail', '补齐任务失败，已保留失败节点。')
     }
   }
 
@@ -276,6 +344,37 @@ export const resolveCanvasRunStatusMeta = (item, t = defaultTranslate) => {
     }
   }
 
+  if (status === 'completed' && finalVideo) {
+    return {
+      tone: 'success',
+      label: t('canvas.final_video_status_completed_label', '最终成片'),
+      detail: hasMedia
+        ? t('canvas.final_video_status_completed_detail', '最终成片已生成，可预览或下载。')
+        : t('canvas.video_status_completed_syncing', '结果已完成，正在同步预览资源。')
+    }
+  }
+
+  if (status === 'completed' && fillMissing) {
+    const isVideo = item.item_type === 'video'
+    return {
+      tone: 'success',
+      label: t(
+        isVideo
+          ? 'canvas.workflow_fill_missing_video_completed_label'
+          : 'canvas.workflow_fill_missing_image_completed_label',
+        isVideo ? '补齐视频已生成' : '补齐图片已生成'
+      ),
+      detail: hasMedia
+        ? t(
+          isVideo
+            ? 'canvas.workflow_fill_missing_video_completed_detail'
+            : 'canvas.workflow_fill_missing_image_completed_detail',
+          isVideo ? '补齐视频已生成，可用于后续合成。' : '补齐图片已生成，可继续补齐视频。'
+        )
+        : t('canvas.video_status_completed_syncing', '结果已完成，正在同步预览资源。')
+    }
+  }
+
   if (status === 'completed') {
     return {
       tone: 'success',
@@ -283,6 +382,14 @@ export const resolveCanvasRunStatusMeta = (item, t = defaultTranslate) => {
       detail: hasMedia
         ? t('canvas.video_status_completed_detail', item.item_type === 'video' ? '结果已就绪，可直接预览。' : '结果已就绪，可继续作为参考图使用。')
         : t('canvas.video_status_completed_syncing', '结果已完成，正在同步预览资源。')
+    }
+  }
+
+  if (['processing', 'running'].includes(status) && fillMissing) {
+    return {
+      tone: 'info',
+      label: t('canvas.workflow_fill_missing_processing_label', '补齐处理中'),
+      detail: t('canvas.workflow_fill_missing_processing_detail', '补齐任务正在处理中，完成后才能用于合成。')
     }
   }
 

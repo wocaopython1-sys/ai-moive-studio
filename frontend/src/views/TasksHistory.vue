@@ -253,6 +253,12 @@ const formatTime = (value) => {
   return date.toLocaleString()
 }
 
+const shortTaskId = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  return text.length > 12 ? text.slice(0, 8) : text
+}
+
 const formatTaskParams = (task) => {
   const params = {
     ...(task?.request_payload?.options || {}),
@@ -280,6 +286,10 @@ const formatTaskParams = (task) => {
   const workflowPrompts = params.workflow_prompts
   const workflowImages = params.workflow_images
   const workflowVideos = params.workflow_videos
+  const referenceImageTransport = params.reference_image_transport
+  const referenceImageEncoding = params.reference_image_encoding
+  const sourceImageItemId = params.source_image_item_id
+  const finalItemId = params.final_item_id
   if (size) parts.push(`尺寸 ${size}`)
   if (ratio) parts.push(`比例 ${ratio}`)
   if (count) parts.push(`数量 ${count}`)
@@ -302,6 +312,10 @@ const formatTaskParams = (task) => {
   if (workflowPrompts) parts.push(`Prompt ${workflowPrompts}`)
   if (workflowImages) parts.push(`图片 ${workflowImages}`)
   if (workflowVideos) parts.push(`视频 ${workflowVideos}`)
+  if (referenceImageTransport) parts.push(`参考图传输 ${referenceImageTransport}`)
+  if (referenceImageEncoding) parts.push(`参考图编码 ${referenceImageEncoding}`)
+  if (sourceImageItemId) parts.push(`来源图片 ${shortTaskId(sourceImageItemId)}`)
+  if (finalItemId) parts.push(`最终节点 ${shortTaskId(finalItemId)}`)
   return parts.join(' / ')
 }
 

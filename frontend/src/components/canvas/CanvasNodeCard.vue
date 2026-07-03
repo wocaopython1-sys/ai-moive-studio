@@ -49,6 +49,10 @@
 
 <script setup>
 import { computed } from 'vue'
+import {
+  isCanvasFinalVideoItem,
+  isCanvasWorkflowFillMissingItem
+} from '@/utils/canvasStageMedia'
 
 const props = defineProps({
   item: {
@@ -77,10 +81,19 @@ const typeLabel = computed(() => {
 })
 
 const statusLabel = computed(() => {
-  const status = props.item.last_run_status || 'idle'
-  if (status === 'queued') return '队列中'
-  if (status === 'running') return '生成中'
-  if (status === 'succeeded') return '已生成'
+  const status = String(props.item.last_run_status || 'idle').trim().toLowerCase()
+  if (isCanvasFinalVideoItem(props.item) && (status === 'completed' || status === 'succeeded')) return '最终成片'
+  if (isCanvasWorkflowFillMissingItem(props.item)) {
+    if (status === 'failed') return '补齐失败'
+    if (['pending', 'queued', 'submitted', 'processing', 'running'].includes(status)) return '补齐中'
+    if (status === 'completed' || status === 'succeeded') {
+      return props.item.item_type === 'video' ? '补齐视频' : '补齐图片'
+    }
+    return '补齐'
+  }
+  if (['queued', 'pending', 'submitted'].includes(status)) return '排队中'
+  if (['running', 'processing'].includes(status)) return '处理中'
+  if (status === 'completed' || status === 'succeeded') return '已完成'
   if (status === 'failed') return '失败'
   return '空闲'
 })

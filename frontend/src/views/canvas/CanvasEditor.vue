@@ -472,7 +472,10 @@
             v-for="item in composeVideoItems"
             :key="item.id"
             class="canvas-batch-prompt canvas-compose-row"
-            :class="{ 'is-disabled': !isComposeVideoReady(item) }"
+            :class="{
+              'is-disabled': !isComposeVideoReady(item),
+              'is-final': isCanvasFinalVideoItem(item)
+            }"
           >
             <label class="canvas-compose-row__main">
               <input
@@ -489,7 +492,8 @@
             <em v-if="composeVideoOrderIndex(item.id) >= 0">
               第 {{ composeVideoOrderIndex(item.id) + 1 }} 段
             </em>
-            <em v-else-if="!isComposeVideoReady(item)">不可用</em>
+            <em v-else-if="!isComposeVideoReady(item)">{{ composeVideoUnavailableReason(item) }}</em>
+            <em v-else-if="isCanvasFinalVideoItem(item)">最终成片</em>
             <div
               v-if="composeVideoOrderIndex(item.id) >= 0"
               class="canvas-compose-row__order"
@@ -921,7 +925,10 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     normalizeVideoAspectRatio
   } from '@/utils/canvasGenerationPayload'
   import { buildCanvasHistoryEntries } from '@/utils/canvasGenerationHistory'
-  import { resolveCanvasRunStatusMeta } from '@/utils/canvasStageMedia'
+  import {
+    isCanvasFinalVideoItem,
+    resolveCanvasRunStatusMeta
+  } from '@/utils/canvasStageMedia'
   import { buildPromptDerivatives } from '@/utils/promptMentionTokens'
 
   const route = useRoute()
@@ -1582,12 +1589,39 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     item?.last_run_status === 'completed' &&
     Boolean(resolveObjectKeyFromItem(item) || resolveItemMediaUrl(item, 'stream'))
 
+  const composeVideoUnavailableReason = (item) => {
+    if (isComposeVideoReady(item)) {
+      return isCanvasFinalVideoItem(item)
+        ? '最终成片，不建议作为源视频自动选择'
+        : ''
+    }
+    if (item?.item_type !== 'video') {
+      return '不是视频节点'
+    }
+    const status = String(item?.last_run_status || '').trim().toLowerCase()
+    if (status === 'failed') {
+      return '生成失败，不能合成'
+    }
+    if (['processing', 'running', 'pending', 'queued', 'submitted'].includes(status)) {
+      return '仍在处理中，完成后才能合成'
+    }
+    if (status === 'completed') {
+      return '缺少视频文件，不能合成'
+    }
+    return '视频未完成，不能合成'
+  }
+
   const composeVideoTitle = (item) =>
     String(item?.title || '').trim() || '视频节点'
 
   const composeVideoPreview = (item) => {
     const objectKey = resolveObjectKeyFromItem(item)
-    if (objectKey) return objectKey.split('/').pop() || objectKey
+    if (objectKey) {
+      const fileName = objectKey.split('/').pop() || objectKey
+      return isCanvasFinalVideoItem(item)
+        ? `最终成片，不建议作为源视频自动选择 · ${fileName}`
+        : fileName
+    }
     if (item?.last_run_status !== 'completed') {
       return item?.last_run_error || '视频未完成'
     }
@@ -1600,7 +1634,7 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   const toggleComposeVideo = (itemId) => {
     const item = items.value.find((entry) => entry.id === itemId)
     if (!isComposeVideoReady(item)) {
-      ElMessage.warning('该视频节点未完成或没有可用视频')
+      ElMessage.warning(composeVideoUnavailableReason(item))
       return
     }
     const selected = [...composeSelectedVideoIds.value]
@@ -1630,11 +1664,15 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   const selectCurrentVideoNodesForCompose = () => {
     const selectedVideoIds = (selectedItemIds.value || []).filter((itemId) =>
       items.value.some(
-        (item) => item.id === itemId && item.item_type === 'video' && isComposeVideoReady(item)
+        (item) =>
+          item.id === itemId &&
+          item.item_type === 'video' &&
+          isComposeVideoReady(item) &&
+          !isCanvasFinalVideoItem(item)
       )
     )
     const fallbackVideoIds = composeVideoItems.value
-      .filter(isComposeVideoReady)
+      .filter((item) => isComposeVideoReady(item) && !isCanvasFinalVideoItem(item))
       .slice(0, 2)
       .map((item) => item.id)
     composeSelectedVideoIds.value = (selectedVideoIds.length
