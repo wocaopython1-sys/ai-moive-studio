@@ -50,6 +50,41 @@
         />
       </CanvasWorkbenchLayout>
 
+      <aside
+        v-if="workflowSummary.totalItems"
+        class="canvas-workflow-summary"
+        :class="`is-${workflowSummary.statusTone}`"
+        data-testid="canvas-workflow-summary"
+      >
+        <header class="canvas-workflow-summary__header">
+          <div>
+            <h3>Workflow 摘要</h3>
+            <p>{{ workflowSummary.statusLabel }}</p>
+          </div>
+          <strong>{{ workflowFinalHint }}</strong>
+        </header>
+        <dl class="canvas-workflow-summary__metrics">
+          <div
+            v-for="metric in workflowSummaryMetrics"
+            :key="metric.key"
+          >
+            <dt>{{ metric.label }}</dt>
+            <dd>{{ metric.value }}</dd>
+          </div>
+        </dl>
+        <ul
+          v-if="workflowSummary.warnings.length"
+          class="canvas-workflow-summary__warnings"
+        >
+          <li
+            v-for="warning in workflowSummary.warnings"
+            :key="warning"
+          >
+            {{ warning }}
+          </li>
+        </ul>
+      </aside>
+
       <CanvasTextStudio
         v-if="selectedItem?.item_type === 'text'"
         ref="textStudioRef"
@@ -925,6 +960,7 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     normalizeVideoAspectRatio
   } from '@/utils/canvasGenerationPayload'
   import { buildCanvasHistoryEntries } from '@/utils/canvasGenerationHistory'
+  import { buildCanvasWorkflowSummary } from '@/utils/canvasWorkflowSummary'
   import {
     isCanvasFinalVideoItem,
     resolveCanvasRunStatusMeta
@@ -1056,6 +1092,28 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     updateItem,
     (itemId) => items.value.find((entry) => entry.id === itemId) || null
   )
+
+  const workflowSummary = computed(() =>
+    buildCanvasWorkflowSummary(items.value, connections.value)
+  )
+  const workflowSummaryMetrics = computed(() => [
+    { key: 'image', label: '图片', value: workflowSummary.value.imageCount },
+    { key: 'video', label: '视频', value: workflowSummary.value.videoCount },
+    { key: 'completed', label: '已完成', value: workflowSummary.value.completedCount },
+    { key: 'processing', label: '处理中', value: workflowSummary.value.processingCount },
+    { key: 'failed', label: '失败', value: workflowSummary.value.failedCount },
+    { key: 'fill_missing', label: '补齐', value: workflowSummary.value.fillMissingCount },
+    { key: 'final', label: '最终成片', value: workflowSummary.value.finalCount }
+  ])
+  const workflowFinalHint = computed(() => {
+    if (workflowSummary.value.hasCompletedFinalVideo) {
+      return '最终成片已生成'
+    }
+    if (workflowSummary.value.hasFinalVideo) {
+      return '最终成片节点存在'
+    }
+    return '尚未发现最终成片'
+  })
 
   const viewport = reactive({ width: 0, height: 0 })
   const viewportCommand = ref(null)
@@ -4464,6 +4522,112 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     box-shadow: 0 18px 48px rgba(46, 82, 144, 0.1);
   }
 
+  .canvas-workflow-summary {
+    position: absolute;
+    top: 84px;
+    right: min(380px, calc(100% - 360px));
+    z-index: 985;
+    width: min(340px, calc(100% - 40px));
+    padding: 14px;
+    border: 1px solid rgba(31, 49, 88, 0.14);
+    border-left: 4px solid #6b7894;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 12px 30px rgba(24, 42, 80, 0.12);
+    pointer-events: auto;
+  }
+
+  .canvas-workflow-summary.is-success {
+    border-left-color: #22a06b;
+  }
+
+  .canvas-workflow-summary.is-warning {
+    border-left-color: #d9822b;
+  }
+
+  .canvas-workflow-summary.is-error {
+    border-left-color: #d14343;
+  }
+
+  .canvas-workflow-summary.is-info {
+    border-left-color: #2f68ff;
+  }
+
+  .canvas-workflow-summary__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .canvas-workflow-summary__header h3 {
+    margin: 0;
+    color: #1d2b46;
+    font-size: 14px;
+    line-height: 1.25;
+  }
+
+  .canvas-workflow-summary__header p {
+    margin: 4px 0 0;
+    color: #6b7894;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .canvas-workflow-summary__header strong {
+    flex: 0 0 auto;
+    max-width: 130px;
+    color: #274064;
+    font-size: 12px;
+    line-height: 1.35;
+    text-align: right;
+  }
+
+  .canvas-workflow-summary__metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin: 12px 0 0;
+  }
+
+  .canvas-workflow-summary__metrics div {
+    min-width: 0;
+    padding: 8px;
+    border-radius: 10px;
+    background: #f6f8fb;
+  }
+
+  .canvas-workflow-summary__metrics dt,
+  .canvas-workflow-summary__metrics dd {
+    margin: 0;
+  }
+
+  .canvas-workflow-summary__metrics dt {
+    color: #6b7894;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .canvas-workflow-summary__metrics dd {
+    margin-top: 3px;
+    color: #1d2b46;
+    font-size: 16px;
+    font-weight: 800;
+    line-height: 1;
+  }
+
+  .canvas-workflow-summary__warnings {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 10px 0 0;
+    padding: 0;
+    color: #6b4b16;
+    font-size: 12px;
+    line-height: 1.35;
+    list-style: none;
+  }
+
   .canvas-asset-panel {
     position: absolute;
     top: 84px;
@@ -5126,6 +5290,14 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   }
 
   @media (max-width: 720px) {
+    .canvas-workflow-summary {
+      top: auto;
+      right: 12px;
+      bottom: 16px;
+      left: 12px;
+      width: auto;
+    }
+
     .canvas-batch-launcher--workflow {
       left: 12px;
       top: 148px;
