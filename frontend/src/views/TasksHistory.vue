@@ -272,8 +272,11 @@ const formatTaskParams = (task) => {
   const sourceVideos = params.source_videos
   const workflowId = params.workflow_id
   const workflowLabel = params.workflow_label
+  const workflowMode = params.workflow_mode
   const workflowStage = params.workflow_stage
   const workflowStageIndex = params.workflow_stage_index
+  const workflowAction = params.workflow_action
+  const fillMissing = params.fill_missing === true || params.fill_missing === 'true'
   const workflowPrompts = params.workflow_prompts
   const workflowImages = params.workflow_images
   const workflowVideos = params.workflow_videos
@@ -290,6 +293,9 @@ const formatTaskParams = (task) => {
   if (workflowLabel || workflowId) {
     parts.push(`工作流 ${workflowLabel || String(workflowId).slice(0, 8)}`)
   }
+  if (workflowMode) parts.push(`模式 ${workflowMode}`)
+  if (fillMissing) parts.push('补齐缺失项')
+  if (workflowAction) parts.push(`动作 ${workflowAction}`)
   if (workflowStage) {
     parts.push(`阶段 ${workflowStageIndex ? `${workflowStageIndex}-` : ''}${workflowStage}`)
   }

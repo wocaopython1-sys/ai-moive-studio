@@ -47,6 +47,8 @@ PROMPT_SPACE_PATTERN = re.compile(r"[ \t]+")
 PROMPT_BLANK_LINE_PATTERN = re.compile(r"\n{3,}")
 REFERENCE_TEXT_LIMIT = 1500
 REFERENCE_IMAGE_LIMIT = 2
+BIGMODEL_REFERENCE_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+BIGMODEL_REFERENCE_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/jpg"}
 MEDIA_URL_TO_OBJECT_KEY_FIELDS = {
     "result_image_url": "result_image_object_key",
     "reference_image_url": "reference_image_object_key",
@@ -1141,8 +1143,11 @@ class CanvasTaskHistoryService(BaseService):
             "batch_total",
             "workflow_id",
             "workflow_label",
+            "workflow_mode",
             "workflow_stage",
             "workflow_stage_index",
+            "workflow_action",
+            "fill_missing",
             "source_prompt_item_id",
             "source_image_item_id",
         ):
@@ -1879,10 +1884,22 @@ class CanvasGenerationService(BaseService):
                 base_url=api_key.base_url or "https://api.vectorengine.ai/v1",
             )
             options = request.get("options") or {}
-            reference_images = options.get("reference_image_urls") or item.content_json.get("reference_image_urls") or []
+            reference_image_urls = options.get("reference_image_urls") or item.content_json.get("reference_image_urls") or []
+            reference_image_object_keys = (
+                options.get("reference_image_object_keys")
+                or item.content_json.get("reference_image_object_keys")
+                or []
+            )
+            using_object_key_references = bool(provider._is_bigmodel() and reference_image_object_keys)
+            reference_images = reference_image_urls
+            if provider._is_bigmodel() and reference_image_object_keys:
+                reference_images = reference_image_object_keys
             provider_images = await self._resolve_video_reference_images(
                 reference_images,
                 prefer_public_urls=provider._is_bigmodel(),
+                fallback_references=reference_image_urls if using_object_key_references else None,
+                allowed_mime_types=BIGMODEL_REFERENCE_IMAGE_MIME_TYPES if provider._is_bigmodel() else None,
+                max_bytes=BIGMODEL_REFERENCE_IMAGE_MAX_BYTES if provider._is_bigmodel() else None,
             )
             provider_options = {
                 key: value
@@ -3005,24 +3022,64 @@ class CanvasGenerationService(BaseService):
         )
         return {"object_key": storage["object_key"], "url": storage["url"]}
 
-    async def _resolve_video_reference_images(self, references: List[str], *, prefer_public_urls: bool = False) -> List[str]:
+    async def _resolve_video_reference_images(
+        self,
+        references: List[str],
+        *,
+        prefer_public_urls: bool = False,
+        fallback_references: Optional[List[str]] = None,
+        allowed_mime_types: Optional[set[str]] = None,
+        max_bytes: Optional[int] = None,
+    ) -> List[str]:
         resolved: List[str] = []
-        for reference in references or []:
-            normalized = str(reference or "").strip()
-            if not normalized:
-                continue
+        fallback_values = self._normalize_reference_values(fallback_references)
+        for reference_index, normalized in enumerate(self._normalize_reference_values(references)):
             if normalized.startswith("data:image/"):
                 resolved.append(normalized)
                 continue
             if normalized.startswith("uploads/"):
                 if prefer_public_urls:
-                    public_url = absolute_public_media_url_for_object_key(normalized)
-                    if public_url:
-                        resolved.append(public_url)
+                    try:
+                        storage_client = await get_storage_client()
+                        image_bytes = await storage_client.download_file(normalized)
+                        image_base64 = self._build_image_base64_payload(
+                            image_bytes,
+                            allowed_mime_types=allowed_mime_types,
+                            max_bytes=max_bytes,
+                        )
+                        logger.info(
+                            "Canvas video reference image resolved as raw base64: object_key=%s mime=%s size_bytes=%s base64_length=%s reference_image_encoding=raw_base64",
+                            normalized,
+                            self._detect_image_mime_type(image_bytes),
+                            len(image_bytes),
+                            len(image_base64),
+                        )
+                        resolved.append(image_base64)
                         continue
+                    except Exception as exc:
+                        fallback_url = (
+                            str(fallback_values[reference_index]).strip()
+                            if reference_index < len(fallback_values)
+                            else absolute_public_media_url_for_object_key(normalized)
+                        )
+                        if fallback_url:
+                            logger.warning(
+                                "Canvas video reference image base64 fallback to public URL: object_key=%s error=%s",
+                                normalized,
+                                exc,
+                            )
+                            resolved.append(fallback_url)
+                            continue
+                        raise
                 storage_client = await get_storage_client()
                 image_bytes = await storage_client.download_file(normalized)
-                resolved.append(self._build_image_data_url(image_bytes))
+                resolved.append(
+                    self._build_image_data_url(
+                        image_bytes,
+                        allowed_mime_types=allowed_mime_types,
+                        max_bytes=max_bytes,
+                    )
+                )
                 continue
             if prefer_public_urls and normalized.startswith(("http://", "https://")):
                 resolved.append(normalized)
@@ -3031,12 +3088,64 @@ class CanvasGenerationService(BaseService):
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
                 response = await client.get(normalized)
                 response.raise_for_status()
-                resolved.append(self._build_image_data_url(response.content, response.headers.get("content-type")))
+                resolved.append(
+                    self._build_image_data_url(
+                        response.content,
+                        response.headers.get("content-type"),
+                        allowed_mime_types=allowed_mime_types,
+                        max_bytes=max_bytes,
+                    )
+                )
         return resolved
 
-    def _build_image_data_url(self, image_bytes: bytes, content_type: Optional[str] = None) -> str:
+    def _normalize_reference_values(self, references: Any) -> List[str]:
+        if isinstance(references, (list, tuple)):
+            return [
+                str(reference or "").strip()
+                for reference in references
+                if str(reference or "").strip()
+            ]
+        normalized = str(references or "").strip()
+        return [normalized] if normalized else []
+
+    def _build_image_base64_payload(
+        self,
+        image_bytes: bytes,
+        content_type: Optional[str] = None,
+        *,
+        allowed_mime_types: Optional[set[str]] = None,
+        max_bytes: Optional[int] = None,
+    ) -> str:
+        image_bytes = image_bytes or b""
+        size_bytes = len(image_bytes)
+        if max_bytes is not None and size_bytes > max_bytes:
+            raise BusinessLogicError(f"参考图大小超过限制：{size_bytes} bytes")
         mime_type = self._detect_image_mime_type(image_bytes, content_type)
-        encoded = base64.b64encode(image_bytes).decode("utf-8")
+        if allowed_mime_types and mime_type not in allowed_mime_types:
+            raise BusinessLogicError(f"参考图格式不支持：{mime_type}")
+        return base64.b64encode(image_bytes).decode("utf-8")
+
+    def _build_image_data_url(
+        self,
+        image_bytes: bytes,
+        content_type: Optional[str] = None,
+        *,
+        allowed_mime_types: Optional[set[str]] = None,
+        max_bytes: Optional[int] = None,
+    ) -> str:
+        image_bytes = image_bytes or b""
+        size_bytes = len(image_bytes)
+        if max_bytes is not None and size_bytes > max_bytes:
+            raise BusinessLogicError(f"参考图大小超过限制：{size_bytes} bytes")
+        mime_type = self._detect_image_mime_type(image_bytes, content_type)
+        if allowed_mime_types and mime_type not in allowed_mime_types:
+            raise BusinessLogicError(f"参考图格式不支持：{mime_type}")
+        encoded = self._build_image_base64_payload(
+            image_bytes,
+            content_type,
+            allowed_mime_types=allowed_mime_types,
+            max_bytes=max_bytes,
+        )
         return f"data:{mime_type};base64,{encoded}"
 
     def _detect_image_mime_type(self, image_bytes: bytes, content_type: Optional[str] = None) -> str:

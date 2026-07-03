@@ -1793,8 +1793,11 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       batch_label: '一键成片图片',
       workflow_id: workflowId,
       workflow_label: '分镜成片',
+      workflow_mode: 'fill_missing',
       workflow_stage: 'image',
       workflow_stage_index: 1,
+      workflow_action: 'generate_missing_image',
+      fill_missing: true,
       source_item_id: promptItem.id,
       source_prompt_item_id: promptItem.id
     }
@@ -1811,8 +1814,11 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       batch_label: '一键成片视频',
       workflow_id: workflowId,
       workflow_label: '分镜成片',
+      workflow_mode: 'fill_missing',
       workflow_stage: 'video',
       workflow_stage_index: 2,
+      workflow_action: 'generate_missing_video',
+      fill_missing: true,
       source_item_id: imageItem.id,
       source_prompt_item_id: promptItem.id,
       source_image_item_id: imageItem.id
@@ -1916,6 +1922,7 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
 
     resetWorkflowStatus()
     const initialPaths = promptItems.map(buildWorkflowPathForPrompt)
+    const fillMissingNeeded = initialPaths.some((path) => path.missingImage || path.missingVideo)
     if (dryRun) {
       setWorkflowStage('prepare', 'completed')
       setWorkflowStage(
@@ -2011,8 +2018,11 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
           batch_label: '一键成片',
           workflow_id: workflowId,
           workflow_label: '分镜成片',
+          workflow_mode: workflowMode.value,
           workflow_stage: 'compose',
           workflow_stage_index: 3,
+          workflow_action: fillMissingNeeded ? 'fill_missing_compose' : 'reuse_compose',
+          fill_missing: workflowMode.value === 'fill_missing' && fillMissingNeeded,
           workflow_prompt_item_ids: promptItems.map((item) => item.id),
           workflow_image_item_ids: imageItems.map((item) => item.id),
           workflow_video_item_ids: sourceItemIds
