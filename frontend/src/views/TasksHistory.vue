@@ -338,15 +338,21 @@ const openDetail = async (task) => {
 }
 
 const jumpToCanvas = (task) => {
-  if (!task.canvas_id || !task.canvas_item_id) {
-    ElMessage.warning('该任务没有关联 Canvas 节点')
+  const canvasId = task?.canvas_id
+  const itemId = task?.canvas_item_id || task?.item_id
+  if (!canvasId) {
+    ElMessage.warning('该任务缺少 Canvas 信息，无法跳转')
     return
   }
-  router.push({
+
+  const routeTarget = {
     name: 'CanvasEditor',
-    params: { canvasId: task.canvas_id },
-    query: { item_id: task.canvas_item_id }
-  })
+    params: { canvasId }
+  }
+  if (itemId) {
+    routeTarget.query = { item_id: itemId }
+  }
+  router.push(routeTarget)
 }
 
 const openMedia = (task) => {
