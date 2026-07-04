@@ -90,8 +90,19 @@
           <div class="asset-card__body">
             <div class="asset-card__title">{{ assetTitle(asset) }}</div>
             <div class="asset-card__meta">
-              <span>{{ mediaTypeLabel(asset.media_type) }}</span>
-              <span>{{ sourceLabel(asset.source) }}</span>
+              <span class="asset-label" :data-tone="asset.labels.typeTone">
+                {{ asset.labels.typeLabel }}
+              </span>
+              <span class="asset-label" :data-tone="asset.labels.sourceTone">
+                {{ asset.labels.sourceLabel }}
+              </span>
+              <span
+                v-if="asset.labels.finalLabel"
+                class="asset-label"
+                data-tone="final"
+              >
+                {{ asset.labels.finalLabel }}
+              </span>
               <span v-if="asset.size_mb">{{ asset.size_mb }} MB</span>
             </div>
             <div class="asset-card__actions">
@@ -115,7 +126,14 @@
       <aside class="asset-detail" data-testid="asset-detail">
         <template v-if="selectedAsset">
           <div class="asset-detail__head">
-            <span>{{ mediaTypeLabel(selectedAsset.media_type) }}</span>
+            <div class="asset-detail__labels">
+              <span class="asset-label" :data-tone="selectedAsset.labels.typeTone">
+                {{ selectedAsset.labels.typeLabel }}
+              </span>
+              <span class="asset-label" :data-tone="selectedAsset.labels.sourceTone">
+                {{ selectedAsset.labels.sourceLabel }}
+              </span>
+            </div>
             <strong>{{ assetTitle(selectedAsset) }}</strong>
           </div>
           <div class="asset-detail__preview">
@@ -135,7 +153,7 @@
           <dl class="asset-detail__meta">
             <div>
               <dt>来源</dt>
-              <dd>{{ sourceLabel(selectedAsset.source) }}</dd>
+              <dd>{{ selectedAsset.labels.sourceLabel }}</dd>
             </div>
             <div v-if="selectedAsset.last_modified">
               <dt>时间</dt>
@@ -167,6 +185,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { canvasService } from '@/services/canvas'
 import { fileService } from '@/services/upload'
+import { buildAssetLibraryLabels } from '@/utils/assetLibraryLabels'
 
 const router = useRouter()
 const loading = ref(false)
@@ -198,16 +217,21 @@ const selectedAsset = computed(
 const normalizeAsset = (asset = {}) => {
   const objectKey = String(asset.object_key || asset.storage_key || '').trim()
   const mediaType = String(asset.media_type || '').trim() || mediaTypeFromObjectKey(objectKey) || 'text'
-  return {
+  const normalized = {
     ...asset,
-    id: asset.id || objectKey,
     object_key: objectKey,
-    media_type: mediaType,
+    media_type: mediaType
+  }
+  const labels = buildAssetLibraryLabels(normalized)
+  return {
+    ...normalized,
+    id: asset.id || objectKey,
     filename: asset.filename || asset.title || objectKey.split('/').pop() || '素材',
     title: asset.title || asset.filename || '',
     preview_url: asset.preview_url || (objectKey && mediaType !== 'text' ? mediaPathForObjectKey(objectKey, 'preview') : ''),
     download_url: asset.download_url || (objectKey && mediaType !== 'text' ? mediaPathForObjectKey(objectKey, 'download') : ''),
-    stream_url: asset.stream_url || (mediaType === 'video' && objectKey ? mediaPathForObjectKey(objectKey, 'stream') : '')
+    stream_url: asset.stream_url || (mediaType === 'video' && objectKey ? mediaPathForObjectKey(objectKey, 'stream') : ''),
+    labels
   }
 }
 
@@ -232,20 +256,6 @@ const toAbsoluteUrl = (url = '') => {
 
 const assetTitle = (asset = {}) =>
   String(asset.title || asset.filename || asset.summary || asset.object_key || '素材').trim()
-
-const mediaTypeLabel = (type = '') => {
-  if (type === 'image') return '图片'
-  if (type === 'video') return '视频'
-  if (type === 'text') return '文本/Prompt'
-  return '素材'
-}
-
-const sourceLabel = (source = '') => {
-  if (source === 'canvas') return 'Canvas'
-  if (source === 'generated') return '生成结果'
-  if (source === 'upload') return '上传'
-  return '未知'
-}
 
 const formatDate = (value = '') => {
   if (!value) return ''
@@ -599,9 +609,49 @@ onMounted(loadAssets)
 .asset-card__meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+.asset-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-primary);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.asset-label[data-tone="image"] {
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #15803d;
+}
+
+.asset-label[data-tone="video"] {
+  border-color: rgba(59, 130, 246, 0.35);
+  color: #1d4ed8;
+}
+
+.asset-label[data-tone="text"] {
+  border-color: rgba(168, 85, 247, 0.35);
+  color: #7e22ce;
+}
+
+.asset-label[data-tone="canvas"] {
+  border-color: rgba(14, 165, 233, 0.35);
+  color: #0369a1;
+}
+
+.asset-label[data-tone="unknown"] {
+  border-color: rgba(100, 116, 139, 0.28);
+  color: #64748b;
 }
 
 .asset-card__actions {
@@ -637,10 +687,10 @@ onMounted(loadAssets)
   border-bottom: 1px solid var(--border-primary);
 }
 
-.asset-detail__head span {
-  color: var(--primary-color);
-  font-size: 12px;
-  font-weight: 800;
+.asset-detail__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .asset-detail__head strong {
