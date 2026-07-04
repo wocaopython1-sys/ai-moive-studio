@@ -72,6 +72,25 @@
             <dd>{{ metric.value }}</dd>
           </div>
         </dl>
+        <section class="canvas-workflow-summary__links">
+          <h4>链路摘要</h4>
+          <ul v-if="workflowSummary.hasWorkflowLinks">
+            <li
+              v-for="link in workflowSummary.workflowLinks"
+              :key="link.id"
+            >
+              <span>{{ link.label }}</span>
+              <em>{{ link.statusLabel }}</em>
+            </li>
+          </ul>
+          <p v-else>{{ workflowSummary.linkSummaryLabel }}</p>
+          <p
+            v-for="warning in workflowSummary.linkWarnings"
+            :key="warning"
+          >
+            {{ warning }}
+          </p>
+        </section>
         <ul
           v-if="workflowSummary.warnings.length"
           class="canvas-workflow-summary__warnings"
@@ -4614,6 +4633,61 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     font-size: 16px;
     font-weight: 800;
     line-height: 1;
+  }
+
+  .canvas-workflow-summary__links {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(31, 49, 88, 0.08);
+  }
+
+  .canvas-workflow-summary__links h4 {
+    margin: 0 0 6px;
+    color: #1d2b46;
+    font-size: 12px;
+    line-height: 1.3;
+  }
+
+  .canvas-workflow-summary__links ul {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .canvas-workflow-summary__links li {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+    color: #274064;
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .canvas-workflow-summary__links span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .canvas-workflow-summary__links em {
+    flex: 0 0 auto;
+    max-width: 88px;
+    color: #6b7894;
+    font-size: 11px;
+    font-style: normal;
+    line-height: 1.35;
+    text-align: right;
+  }
+
+  .canvas-workflow-summary__links p {
+    margin: 4px 0 0;
+    color: #6b7894;
+    font-size: 12px;
+    line-height: 1.35;
   }
 
   .canvas-workflow-summary__warnings {

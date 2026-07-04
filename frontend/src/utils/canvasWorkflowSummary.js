@@ -12,6 +12,8 @@ const PROCESSING_STATUSES = new Set([
   'submitted'
 ])
 const FAILED_STATUSES = new Set(['failed', 'error'])
+const MAX_WORKFLOW_LINKS = 5
+const MAX_LINK_DEPTH = 6
 
 const normalizeStatus = (value) => String(value || '').trim().toLowerCase()
 
@@ -122,6 +124,184 @@ const buildWarnings = ({ mediaCount, failedCount, processingCount, finalCount })
   return warnings
 }
 
+const nodeTypeMeta = (item) => {
+  if (isCanvasFinalVideoItem(item)) {
+    return { type: 'final', label: 'Final', isFinal: true }
+  }
+  if (item?.item_type === 'text' || item?.item_type === 'prompt') {
+    return { type: 'prompt', label: 'Prompt', isFinal: false }
+  }
+  if (item?.item_type === 'image') {
+    return { type: 'image', label: 'Image', isFinal: false }
+  }
+  if (item?.item_type === 'video') {
+    return { type: 'video', label: 'Video', isFinal: false }
+  }
+  return { type: 'node', label: '节点', isFinal: false }
+}
+
+const buildStep = (item) => {
+  const meta = nodeTypeMeta(item)
+  return {
+    itemId: item?.id,
+    type: meta.type,
+    label: meta.label,
+    status: normalizeStatus(item?.last_run_status) || 'unknown',
+    isFinal: meta.isFinal
+  }
+}
+
+const isReliablePath = (steps) => {
+  if (steps.length < 2) {
+    return false
+  }
+  const types = new Set(steps.map((step) => step.type))
+  return (
+    types.has('final') ||
+    types.has('video') ||
+    (types.has('prompt') && types.has('image')) ||
+    (types.has('image') && types.has('video'))
+  )
+}
+
+const workflowLinkStatusLabel = ({ hasFailed, hasProcessing, hasFinal, steps }) => {
+  if (hasFailed) {
+    return '存在失败'
+  }
+  if (hasProcessing) {
+    return '处理中'
+  }
+  if (hasFinal) {
+    return '已有最终成片'
+  }
+  const mediaSteps = steps.filter((step) => ['image', 'video'].includes(step.type))
+  if (mediaSteps.length && mediaSteps.every((step) => COMPLETED_STATUSES.has(step.status))) {
+    return '已完成'
+  }
+  return '可查看'
+}
+
+const workflowLinkScore = (link) => {
+  const types = new Set(link.steps.map((step) => step.type))
+  let score = 0
+  if (types.has('final')) score += 100
+  if (types.has('image') && types.has('video')) score += 60
+  if (types.has('prompt')) score += 20
+  score += Math.min(link.steps.length, MAX_LINK_DEPTH)
+  if (link.hasFailed) score -= 5
+  if (link.hasProcessing) score -= 2
+  return score
+}
+
+const buildWorkflowLink = (path) => {
+  const steps = path.map(buildStep)
+  const hasFailed = path.some(isFailed)
+  const hasProcessing = path.some(isProcessing)
+  const hasFinal = steps.some((step) => step.isFinal)
+  return {
+    id: steps.map((step) => step.itemId).join('>'),
+    label: steps.map((step) => step.label).join(' → '),
+    steps,
+    statusLabel: workflowLinkStatusLabel({ hasFailed, hasProcessing, hasFinal, steps }),
+    hasFailed,
+    hasProcessing,
+    hasFinal
+  }
+}
+
+const buildWorkflowLinks = (items, connections) => {
+  const itemById = new Map()
+  for (const item of items) {
+    const id = firstString(item?.id)
+    if (id) {
+      itemById.set(id, item)
+    }
+  }
+
+  const outgoing = new Map()
+  const incomingIds = new Set()
+  for (const connection of connections) {
+    const sourceId = firstString(connection?.source_item_id)
+    const targetId = firstString(connection?.target_item_id)
+    if (!sourceId || !targetId || !itemById.has(sourceId) || !itemById.has(targetId)) {
+      continue
+    }
+    if (!outgoing.has(sourceId)) {
+      outgoing.set(sourceId, [])
+    }
+    outgoing.get(sourceId).push(targetId)
+    incomingIds.add(targetId)
+  }
+
+  for (const targetIds of outgoing.values()) {
+    targetIds.sort((left, right) => left.localeCompare(right))
+  }
+
+  const sourceItems = items.filter((item) => outgoing.has(firstString(item?.id)))
+  const rootItems = sourceItems.filter((item) => !incomingIds.has(firstString(item?.id)))
+  const startItems = rootItems.length ? rootItems : sourceItems
+  const candidateLinks = []
+  const seenPathIds = new Set()
+
+  const addCandidate = (path) => {
+    const steps = path.map(buildStep)
+    if (!isReliablePath(steps)) {
+      return
+    }
+    const id = steps.map((step) => step.itemId).join('>')
+    if (seenPathIds.has(id)) {
+      return
+    }
+    seenPathIds.add(id)
+    candidateLinks.push(buildWorkflowLink(path))
+  }
+
+  const walk = (item, path, visitedIds) => {
+    const itemId = firstString(item?.id)
+    const targetIds = outgoing.get(itemId) || []
+    const reachedMaxDepth = path.length >= MAX_LINK_DEPTH
+    const reachedFinal = isCanvasFinalVideoItem(item)
+    const nextTargetIds = targetIds.filter((targetId) => !visitedIds.has(targetId))
+
+    if (reachedFinal || reachedMaxDepth || !nextTargetIds.length) {
+      addCandidate(path)
+      return
+    }
+
+    for (const targetId of nextTargetIds) {
+      const targetItem = itemById.get(targetId)
+      walk(targetItem, [...path, targetItem], new Set([...visitedIds, targetId]))
+    }
+  }
+
+  for (const item of startItems) {
+    const itemId = firstString(item?.id)
+    walk(item, [item], new Set([itemId]))
+  }
+
+  const reliableLinks = candidateLinks.sort((left, right) => {
+    const scoreDiff = workflowLinkScore(right) - workflowLinkScore(left)
+    if (scoreDiff) {
+      return scoreDiff
+    }
+    return left.id.localeCompare(right.id)
+  })
+  const workflowLinks = reliableLinks.slice(0, MAX_WORKFLOW_LINKS)
+  const hiddenLinkCount = Math.max(reliableLinks.length - workflowLinks.length, 0)
+  const linkWarnings = hiddenLinkCount ? [`另有 ${hiddenLinkCount} 条链路未展示`] : []
+
+  return {
+    workflowLinks,
+    reliableLinkCount: reliableLinks.length,
+    hiddenLinkCount,
+    hasWorkflowLinks: workflowLinks.length > 0,
+    linkSummaryLabel: workflowLinks.length
+      ? `已识别 ${reliableLinks.length} 条可靠链路`
+      : '暂无可可靠推导链路',
+    linkWarnings
+  }
+}
+
 export function buildCanvasWorkflowSummary(items = [], connections = []) {
   const safeItems = asArray(items)
   const safeConnections = asArray(connections)
@@ -152,6 +332,7 @@ export function buildCanvasWorkflowSummary(items = [], connections = []) {
     processingCount: processingItems.length,
     finalCount: finalVideoItems.length
   })
+  const workflowLinkSummary = buildWorkflowLinks(safeItems, safeConnections)
 
   return {
     totalItems: safeItems.length,
@@ -172,6 +353,7 @@ export function buildCanvasWorkflowSummary(items = [], connections = []) {
     failedVideoItems,
     fillMissingItems,
     ...statusMeta,
-    warnings
+    warnings,
+    ...workflowLinkSummary
   }
 }
