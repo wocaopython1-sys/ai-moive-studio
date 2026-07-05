@@ -115,6 +115,13 @@
                 下载
               </button>
               <button type="button" @click.stop="copyAssetUrl(asset)">复制 URL</button>
+              <button
+                v-if="asset.canvas_id"
+                type="button"
+                @click.stop="openSourceCanvas(asset)"
+              >
+                查看 Canvas
+              </button>
               <button class="primary" type="button" @click.stop="addAssetToCanvas(asset)">
                 加入 Canvas
               </button>
