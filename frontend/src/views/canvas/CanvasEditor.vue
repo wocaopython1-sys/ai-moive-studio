@@ -905,6 +905,15 @@
             保存到素材库
           </button>
           <button
+            v-if="canOpenSelectedInLibrary"
+            class="canvas-relation-btn"
+            type="button"
+            data-testid="open-selected-in-library"
+            @click="openSelectedInLibrary"
+          >
+            在素材库查看
+          </button>
+          <button
             class="canvas-relation-btn"
             type="button"
             data-testid="set-relation-source"
@@ -2351,6 +2360,16 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     }
     return ''
   }
+
+  const selectedMediaLibrarySearchKey = computed(() => {
+    const item = selectedItem.value
+    if (!['image', 'video'].includes(item?.item_type)) return ''
+    return resolveObjectKeyFromItem(item)
+  })
+
+  const canOpenSelectedInLibrary = computed(() =>
+    Boolean(selectedMediaLibrarySearchKey.value)
+  )
 
   const mediaTypeFromObjectKey = (objectKey = '') => {
     const suffix = String(objectKey || '').split('?')[0].split('.').pop()?.toLowerCase()
@@ -3883,6 +3902,15 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
 
   const downloadSelectedMedia = () => {
     downloadUrl(resolveItemMediaUrl(selectedItem.value, 'download'))
+  }
+
+  const openSelectedInLibrary = () => {
+    const search = selectedMediaLibrarySearchKey.value
+    if (!search) return
+    router.push({
+      path: '/library',
+      query: { search }
+    })
   }
 
   const writeAssistantTextToSelected = async (text = '') => {

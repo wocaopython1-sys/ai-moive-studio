@@ -188,13 +188,14 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { canvasService } from '@/services/canvas'
 import { fileService } from '@/services/upload'
 import { buildAssetLibraryLabels } from '@/utils/assetLibraryLabels'
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(false)
 const assets = ref([])
 const total = ref(0)
@@ -216,6 +217,25 @@ const sourceOptions = [
   { label: '生成结果', value: 'generated' },
   { label: 'Canvas', value: 'canvas' }
 ]
+
+const firstRouteQueryString = (value) => {
+  const values = Array.isArray(value) ? value : [value]
+  for (const item of values) {
+    const normalized = String(item || '').trim()
+    if (normalized) return normalized
+  }
+  return ''
+}
+
+const getRouteSearchQuery = () =>
+  firstRouteQueryString(route.query.search) || firstRouteQueryString(route.query.q)
+
+const applyRouteSearchQuery = () => {
+  const routeSearch = getRouteSearchQuery()
+  if (!routeSearch || searchText.value === routeSearch) return false
+  searchText.value = routeSearch
+  return true
+}
 
 const selectedAsset = computed(
   () => assets.value.find((asset) => (asset.id || asset.object_key) === selectedAssetId.value) || null
@@ -445,7 +465,19 @@ watch([typeFilter, sourceFilter], () => {
   void loadAssets()
 })
 
-onMounted(loadAssets)
+watch(
+  () => [route.query.search, route.query.q],
+  () => {
+    if (applyRouteSearchQuery()) {
+      void loadAssets()
+    }
+  }
+)
+
+onMounted(() => {
+  applyRouteSearchQuery()
+  void loadAssets()
+})
 </script>
 
 <style scoped>
