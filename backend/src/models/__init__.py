@@ -22,6 +22,7 @@ from src.models.sentence import Sentence, SentenceStatus
 from src.models.user import User
 from src.models.movie import MovieCharacter, MovieScript, MovieScene, MovieShot, ScriptStatus
 from src.models.video_task import VideoTask, VideoTaskStatus
+from src.models.work import Work, WorkItem, WorkItemRole, WorkMediaType, WorkStatus
 
 __all__ = [
     "Base",
@@ -40,6 +41,11 @@ __all__ = [
     "APIKeyProvider",
     "VideoTask",
     "VideoTaskStatus",
+    "Work",
+    "WorkItem",
+    "WorkItemRole",
+    "WorkMediaType",
+    "WorkStatus",
     "BGM",
     "BGMStatus",
     "CanvasDocument",
