@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -65,6 +66,34 @@ class WorkService(BaseService):
         if not work:
             raise NotFoundError("作品不存在或无权限访问", resource_type="work", resource_id=work_id)
         return work
+
+    async def get_work_item_media(
+        self,
+        *,
+        user_id: str,
+        work_id: str,
+        item_id: str,
+    ) -> Tuple[Work, WorkItem, str, str, str]:
+        user_uuid = self._uuid(user_id)
+        work = await self.get_work(str(user_uuid), work_id)
+        item_uuid = self._uuid(item_id)
+
+        stmt = select(WorkItem).where(
+            WorkItem.id == item_uuid,
+            WorkItem.work_id == work.id,
+            WorkItem.user_id == user_uuid,
+        )
+        item = (await self.execute(stmt)).scalar_one_or_none()
+        if not item:
+            raise NotFoundError("作品媒体不存在或无权限访问", resource_type="work_item", resource_id=item_id)
+
+        object_key = str(item.object_key or "").strip()
+        if not object_key:
+            raise NotFoundError("作品媒体不存在", resource_type="work_item", resource_id=item_id)
+
+        media_type = str(item.media_type or "").strip()
+        filename = Path(object_key).name or str(item.role or media_type or "media").strip() or "media"
+        return work, item, object_key, media_type, filename
 
     async def create_from_canvas_final(
         self,

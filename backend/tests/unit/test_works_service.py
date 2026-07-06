@@ -250,3 +250,86 @@ async def test_delete_work_soft_deletes_without_removing_sources(db_session):
     works, total = await service.list_works(user_id=str(USER_ID), page=1, size=20)
     assert works == []
     assert total == 0
+
+
+@pytest.mark.asyncio
+async def test_get_work_item_media_returns_owned_item(db_session):
+    work = await create_work(db_session)
+    item = (await db_session.execute(select(WorkItem).where(WorkItem.work_id == work.id))).scalar_one()
+    service = WorkService(db_session)
+
+    media_work, media_item, object_key, media_type, filename = await service.get_work_item_media(
+        user_id=str(USER_ID),
+        work_id=str(work.id),
+        item_id=str(item.id),
+    )
+
+    assert media_work.id == work.id
+    assert media_item.id == item.id
+    assert object_key == FINAL_OBJECT_KEY
+    assert media_type == "video"
+    assert filename == "final-compose.mp4"
+
+
+@pytest.mark.asyncio
+async def test_get_work_item_media_rejects_non_owner(db_session):
+    work = await create_work(db_session)
+    item = (await db_session.execute(select(WorkItem).where(WorkItem.work_id == work.id))).scalar_one()
+    service = WorkService(db_session)
+
+    with pytest.raises(NotFoundError):
+        await service.get_work_item_media(user_id=str(OTHER_USER_ID), work_id=str(work.id), item_id=str(item.id))
+
+
+@pytest.mark.asyncio
+async def test_get_work_item_media_rejects_deleted_work(db_session):
+    work = await create_work(db_session)
+    item = (await db_session.execute(select(WorkItem).where(WorkItem.work_id == work.id))).scalar_one()
+    work_id = str(work.id)
+    item_id = str(item.id)
+    service = WorkService(db_session)
+    await service.delete_work(user_id=str(USER_ID), work_id=work_id)
+
+    with pytest.raises(NotFoundError):
+        await service.get_work_item_media(user_id=str(USER_ID), work_id=work_id, item_id=item_id)
+
+
+@pytest.mark.asyncio
+async def test_get_work_item_media_rejects_item_from_another_work(db_session):
+    first_work = await create_work(db_session)
+    second_work = await create_work(
+        db_session,
+        canvas_id=OTHER_CANVAS_ID,
+        item_id=OTHER_ITEM_ID,
+        generation_id=uuid.UUID("40000000-0000-0000-0000-000000000002"),
+        final_object_key="uploads/user/other-compose.mp4",
+    )
+    second_item = (await db_session.execute(select(WorkItem).where(WorkItem.work_id == second_work.id))).scalar_one()
+    service = WorkService(db_session)
+
+    with pytest.raises(NotFoundError):
+        await service.get_work_item_media(user_id=str(USER_ID), work_id=str(first_work.id), item_id=str(second_item.id))
+
+
+@pytest.mark.asyncio
+async def test_get_work_item_media_rejects_item_user_mismatch(db_session):
+    work = await create_work(db_session)
+    item = (await db_session.execute(select(WorkItem).where(WorkItem.work_id == work.id))).scalar_one()
+    item.user_id = OTHER_USER_ID
+    await db_session.flush()
+    service = WorkService(db_session)
+
+    with pytest.raises(NotFoundError):
+        await service.get_work_item_media(user_id=str(USER_ID), work_id=str(work.id), item_id=str(item.id))
+
+
+@pytest.mark.asyncio
+async def test_get_work_item_media_rejects_blank_object_key(db_session):
+    work = await create_work(db_session)
+    item = (await db_session.execute(select(WorkItem).where(WorkItem.work_id == work.id))).scalar_one()
+    item.object_key = "  "
+    await db_session.flush()
+    service = WorkService(db_session)
+
+    with pytest.raises(NotFoundError):
+        await service.get_work_item_media(user_id=str(USER_ID), work_id=str(work.id), item_id=str(item.id))

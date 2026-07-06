@@ -11,6 +11,63 @@ pytestmark = pytest.mark.integration
 
 FINAL_OBJECT_KEY = "uploads/user/final-compose.mp4"
 
+MEDIA_BYTES = b"fake works media bytes"
+
+
+class FakeObjectResponse:
+    def __init__(self, body: bytes):
+        self.body = body
+        self.closed = False
+        self.released = False
+
+    def stream(self, chunk_size):
+        yield self.body
+
+    def close(self):
+        self.closed = True
+
+    def release_conn(self):
+        self.released = True
+
+
+class FakeStorageClient:
+    def __init__(self, objects=None):
+        self.bucket_name = "test-bucket"
+        self.objects = dict(objects or {})
+        self.requested_keys = []
+        self.put_calls = []
+        self.delete_calls = []
+        self.client = self
+
+    def get_object(self, bucket_name, object_key):
+        self.requested_keys.append(object_key)
+        if bucket_name != self.bucket_name or object_key not in self.objects:
+            raise RuntimeError("object not found")
+        return FakeObjectResponse(self.objects[object_key])
+
+    def put_object(self, *args, **kwargs):
+        self.put_calls.append((args, kwargs))
+        raise AssertionError("works media tests must not write storage")
+
+    def remove_object(self, *args, **kwargs):
+        self.delete_calls.append((args, kwargs))
+        raise AssertionError("works media tests must not delete storage")
+
+
+async def _fake_storage_client(storage):
+    return storage
+
+
+def install_fake_storage(monkeypatch, objects=None):
+    storage = FakeStorageClient(objects)
+
+    async def fake_get_storage_client():
+        return await _fake_storage_client(storage)
+
+    monkeypatch.setattr("src.api.v1.works.get_storage_client", fake_get_storage_client)
+    return storage
+
+
 
 def compose_content(object_key=FINAL_OBJECT_KEY):
     return {
@@ -235,3 +292,159 @@ async def test_duplicate_archive_and_missing_generation_reason(client, auth_head
 
     duplicate = await archive_work(client, auth_headers, canvas_id, item_id)
     assert duplicate.status_code == 400
+
+
+async def archive_media_work(client, auth_headers, db_session):
+    canvas_id, item_id = await create_canvas_final(client, auth_headers, db_session)
+    response = await archive_work(client, auth_headers, canvas_id, item_id)
+    assert response.status_code == 201
+    payload = response.json()
+    return payload, payload["items"][0]
+
+
+@pytest.mark.asyncio
+async def test_owner_can_preview_work_item_media(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+
+    response = await client.get(
+        f"/api/v1/works/{work['id']}/items/{item['id']}/preview",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.content == MEDIA_BYTES
+    assert response.headers["content-type"].startswith("video/mp4")
+    assert "content-disposition" not in response.headers
+    assert storage.requested_keys == [FINAL_OBJECT_KEY]
+    assert storage.put_calls == []
+    assert storage.delete_calls == []
+
+
+@pytest.mark.asyncio
+async def test_owner_can_download_work_item_media(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+
+    response = await client.get(
+        f"/api/v1/works/{work['id']}/items/{item['id']}/download",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.content == MEDIA_BYTES
+    assert response.headers["content-type"].startswith("video/mp4")
+    assert response.headers["content-disposition"] == 'attachment; filename="final-compose.mp4"'
+    assert storage.requested_keys == [FINAL_OBJECT_KEY]
+    assert storage.put_calls == []
+    assert storage.delete_calls == []
+
+
+@pytest.mark.asyncio
+async def test_work_item_media_requires_auth(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+
+    preview = await client.get(f"/api/v1/works/{work['id']}/items/{item['id']}/preview")
+    download = await client.get(f"/api/v1/works/{work['id']}/items/{item['id']}/download")
+
+    assert preview.status_code == 401
+    assert download.status_code == 401
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_non_owner_cannot_access_work_item_media(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    second_headers = await create_second_user_headers(client)
+
+    preview = await client.get(f"/api/v1/works/{work['id']}/items/{item['id']}/preview", headers=second_headers)
+    download = await client.get(f"/api/v1/works/{work['id']}/items/{item['id']}/download", headers=second_headers)
+
+    assert preview.status_code == 404
+    assert download.status_code == 404
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_deleted_work_item_media_returns_404(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    delete_response = await client.delete(f"/api/v1/works/{work['id']}", headers=auth_headers)
+    assert delete_response.status_code == 200
+
+    preview = await client.get(f"/api/v1/works/{work['id']}/items/{item['id']}/preview", headers=auth_headers)
+
+    assert preview.status_code == 404
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_wrong_work_item_media_id_returns_404(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, _item = await archive_media_work(client, auth_headers, db_session)
+
+    response = await client.get(
+        f"/api/v1/works/{work['id']}/items/{uuid.uuid4()}/preview",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_item_from_another_work_media_returns_404(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    first_work, _first_item = await archive_media_work(client, auth_headers, db_session)
+    second_work, second_item = await archive_media_work(client, auth_headers, db_session)
+
+    response = await client.get(
+        f"/api/v1/works/{first_work['id']}/items/{second_item['id']}/preview",
+        headers=auth_headers,
+    )
+
+    assert first_work["id"] != second_work["id"]
+    assert response.status_code == 404
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_blank_work_item_object_key_returns_404(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    db_item = await db_session.get(WorkItem, uuid.UUID(item["id"]))
+    db_item.object_key = "  "
+    await db_session.commit()
+
+    response = await client.get(f"/api/v1/works/{work['id']}/items/{item['id']}/preview", headers=auth_headers)
+
+    assert response.status_code == 404
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_missing_storage_object_returns_404(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+
+    response = await client.get(f"/api/v1/works/{work['id']}/items/{item['id']}/preview", headers=auth_headers)
+
+    assert response.status_code == 404
+    assert storage.requested_keys == [FINAL_OBJECT_KEY]
+
+
+@pytest.mark.asyncio
+async def test_work_item_media_ignores_object_key_query(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES, "uploads/evil.mp4": b"evil"})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+
+    response = await client.get(
+        f"/api/v1/works/{work['id']}/items/{item['id']}/preview?object_key=uploads/evil.mp4",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.content == MEDIA_BYTES
+    assert storage.requested_keys == [FINAL_OBJECT_KEY]
