@@ -185,6 +185,24 @@
           >
             下载
           </button>
+          <template v-if="archivedWorkId">
+            <button class="archive-work-status-btn" disabled>
+              已归档
+            </button>
+            <button class="history-action-btn" @click="$emit('view-work')">
+              查看作品
+            </button>
+          </template>
+          <button
+            v-else-if="canArchiveWork"
+            class="archive-work-action-btn"
+            :disabled="archiveWorkLoading || generating || uploading"
+            :title="archiveWorkLoading ? '归档中...' : '归档为作品'"
+            :aria-label="archiveWorkLoading ? '归档中...' : '归档为作品'"
+            @click="$emit('archive-work')"
+          >
+            {{ archiveWorkLoading ? '归档中...' : '归档为作品' }}
+          </button>
           <button
             class="generate-action-btn"
             :disabled="!canSubmitPrompt || generating || uploading"
@@ -250,7 +268,10 @@
     modelOptions: { type: Array, default: () => [] },
     modelOptionsLoading: { type: Boolean, default: false },
     aspectRatioOptions: { type: Array, default: () => [] },
-    durationOptions: { type: Array, default: () => [] }
+    durationOptions: { type: Array, default: () => [] },
+    canArchiveWork: { type: Boolean, default: false },
+    archiveWorkLoading: { type: Boolean, default: false },
+    archivedWorkId: { type: String, default: '' }
   })
 
   const emit = defineEmits([
@@ -263,6 +284,8 @@
     'history',
     'copy-url',
     'download',
+    'archive-work',
+    'view-work',
     'update:api-key-id',
     'update:aspect-ratio',
     'update:duration-seconds',
@@ -623,7 +646,9 @@
   }
 
   .generate-action-btn,
-  .history-action-btn {
+  .history-action-btn,
+  .archive-work-action-btn,
+  .archive-work-status-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -644,6 +669,19 @@
   .history-action-btn {
     background: #eef4ff;
     color: #355ce0;
+  }
+
+  .archive-work-action-btn {
+    background: #ecfdf3;
+    color: #047857;
+    font-weight: 700;
+    min-width: 96px;
+  }
+
+  .archive-work-status-btn {
+    background: #f1f5f9;
+    color: #64748b;
+    cursor: default;
   }
 
   .panel-delete-btn {

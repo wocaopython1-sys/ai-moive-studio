@@ -182,6 +182,9 @@
         :model-options-loading="catalogLoading"
         :aspect-ratio-options="videoAspectRatioOptions"
         :duration-options="videoDurationOptions"
+        :can-archive-work="canArchiveSelectedWork"
+        :archive-work-loading="archiveWorkPendingItemId === selectedItem.id"
+        :archived-work-id="archivedWorkIdByItemId[selectedItem.id] || ''"
         @focus-item="handleFocusItem"
         @drag-node="startStudioNodeDrag"
         @handle-drag="handleStudioHandleDrag"
@@ -195,6 +198,8 @@
         @history="openHistoryDrawer()"
         @copy-url="copySelectedMediaUrl"
         @download="downloadSelectedMedia"
+        @archive-work="archiveSelectedWork"
+        @view-work="router.push('/works')"
         @upload="uploadMedia($event, 'video')"
         @delete="removeSelectedItem"
       />
@@ -973,6 +978,7 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
   import { apiKeysService } from '@/services/apiKeys'
   import { canvasService } from '@/services/canvas'
   import { fileService } from '@/services/upload'
+  import { worksService } from '@/services/works'
   import {
     DEFAULT_ASPECT_RATIO,
     DEFAULT_IMAGE_ASPECT_RATIO,
@@ -1058,6 +1064,8 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     done: 'pending'
   })
   const workflowLastRun = ref(null)
+  const archiveWorkPendingItemId = ref('')
+  const archivedWorkIdByItemId = reactive({})
   const handledEntryModeKeys = new Set()
 
   const entryModeConfigs = {
@@ -1409,6 +1417,16 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     }
     return resolveCanvasRunStatusMeta(selectedItem.value)
   })
+
+  const canArchiveSelectedWork = computed(() =>
+    Boolean(
+      document.value?.id &&
+        selectedItem.value?.id &&
+        selectedItem.value?.item_type === 'video' &&
+        selectedItem.value?.last_run_status === 'completed' &&
+        isCanvasFinalVideoItem(selectedItem.value)
+    )
+  )
 
   const textModelOptions = computed(() => modelCatalog.value.text || [])
   const imageModelOptions = computed(() => modelCatalog.value.image || [])
@@ -3902,6 +3920,52 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
 
   const downloadSelectedMedia = () => {
     downloadUrl(resolveItemMediaUrl(selectedItem.value, 'download'))
+  }
+
+  const archiveSelectedWork = async () => {
+    const canvasId = String(document.value?.id || '').trim()
+    const item = selectedItem.value
+    const itemId = String(item?.id || '').trim()
+
+    if (!canvasId || !itemId) {
+      ElMessage.error('归档失败：缺少 Canvas 或节点信息')
+      return
+    }
+
+    if (archiveWorkPendingItemId.value) {
+      return
+    }
+
+    archiveWorkPendingItemId.value = itemId
+
+    try {
+      videoStudioRef.value?.flushDraft?.()
+
+      if (dirty.value) {
+        await save()
+      }
+
+      const response = await worksService.createWorkFromCanvasFinal({
+        canvas_id: canvasId,
+        canvas_item_id: itemId,
+        title: String(item?.title || '').trim() || '未命名作品'
+      })
+
+      if (response?.id) {
+        archivedWorkIdByItemId[itemId] = response.id
+      }
+
+      ElMessage.success('已归档为作品')
+    } catch (error) {
+      const message =
+        error?.response?.data?.message ||
+        error?.response?.data?.detail ||
+        error?.message ||
+        '归档失败'
+      ElMessage.error(message)
+    } finally {
+      archiveWorkPendingItemId.value = ''
+    }
   }
 
   const openSelectedInLibrary = () => {

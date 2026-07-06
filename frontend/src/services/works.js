@@ -1,4 +1,4 @@
-import { del, get, patch } from './api'
+import { del, get, patch, post } from './api'
 
 export const worksService = {
   listWorks(params = {}) {
@@ -15,6 +15,10 @@ export const worksService = {
 
   deleteWork(workId) {
     return del(`/works/${workId}`)
+  },
+
+  createWorkFromCanvasFinal(payload) {
+    return post('/works/from-canvas-final', payload)
   }
 }
 
