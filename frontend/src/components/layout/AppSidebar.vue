@@ -138,6 +138,12 @@ const menuItems = [
     badge: null
   },
   {
+    title: '作品库',
+    path: '/works',
+    icon: Document,
+    badge: null
+  },
+  {
     title: '视频生成',
     path: '/generation',
     icon: Document,

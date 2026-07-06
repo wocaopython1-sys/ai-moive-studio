@@ -20,6 +20,7 @@ const CanvasList = () => import('@/views/canvas/CanvasList.vue')
 const CanvasEditor = () => import('@/views/canvas/CanvasEditor.vue')
 const TasksHistory = () => import('@/views/TasksHistory.vue')
 const AssetsLibrary = () => import('@/views/AssetsLibrary.vue')
+const WorksLibrary = () => import('@/views/WorksLibrary.vue')
 
 const routes = [
   {
@@ -167,6 +168,19 @@ const routes = [
         path: '',
         name: 'AssetsLibraryPage',
         component: AssetsLibrary
+      }
+    ]
+  },
+  {
+    path: '/works',
+    name: 'WorksLibrary',
+    component: MainLayout,
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        name: 'WorksLibraryPage',
+        component: WorksLibrary
       }
     ]
   },
