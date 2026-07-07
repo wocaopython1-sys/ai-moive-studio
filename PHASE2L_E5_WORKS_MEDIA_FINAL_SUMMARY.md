@@ -158,3 +158,21 @@ Final closure state:
 - Permission/error-state smoke completed.
 - Smoke cleanup completed.
 - Documentation summaries completed through this final summary.
+
+## 9. Not Completed / Still Pending
+
+- stream/range is not implemented.
+- Video seek/range behavior has not been validated.
+- E2 Canvas archive click success path is still pending.
+- No push has been performed.
+- media.py object_key route remains forbidden for Works.
+- Any future stream/range support must be planned separately.
+- Any future E2 Canvas archive click success validation must be planned separately with real owner credentials or a dedicated sample.
+
+## 10. Recommended Next Step
+
+- If E5 only: stop here, because backend route, frontend UI, frontend runtime, and success-state DOM/Network smoke are closed.
+- Push only when the user explicitly authorizes it.
+- If continuing Phase 2L: plan E2 Canvas archive click success path separately.
+- Do not mix stream/range into E5 closure.
+- Do not reintroduce media.py object_key route for Works.
