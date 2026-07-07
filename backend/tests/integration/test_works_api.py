@@ -1,4 +1,8 @@
+import base64
+import json
 import uuid
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from sqlalchemy import select
@@ -21,7 +25,8 @@ class FakeObjectResponse:
         self.released = False
 
     def stream(self, chunk_size):
-        yield self.body
+        for index in range(0, len(self.body), chunk_size):
+            yield self.body[index:index + chunk_size]
 
     def close(self):
         self.closed = True
@@ -35,15 +40,30 @@ class FakeStorageClient:
         self.bucket_name = "test-bucket"
         self.objects = dict(objects or {})
         self.requested_keys = []
+        self.get_object_calls = []
         self.put_calls = []
         self.delete_calls = []
         self.client = self
 
-    def get_object(self, bucket_name, object_key):
+    def get_object(self, bucket_name, object_key, offset=0, length=0, **_kwargs):
         self.requested_keys.append(object_key)
+        self.get_object_calls.append({"object_key": object_key, "offset": offset, "length": length})
         if bucket_name != self.bucket_name or object_key not in self.objects:
             raise RuntimeError("object not found")
-        return FakeObjectResponse(self.objects[object_key])
+        body = self.objects[object_key]
+        end = None if not length else offset + length
+        return FakeObjectResponse(body[offset:end])
+
+    def stat_object(self, bucket_name, object_key, **_kwargs):
+        if bucket_name != self.bucket_name or object_key not in self.objects:
+            raise RuntimeError("object not found")
+        return SimpleNamespace(
+            size=len(self.objects[object_key]),
+            content_type="video/mp4",
+            metadata={},
+            etag="test-etag",
+            last_modified=None,
+        )
 
     def put_object(self, *args, **kwargs):
         self.put_calls.append((args, kwargs))
@@ -94,6 +114,32 @@ def compose_request():
         "model": "ffmpeg-concat",
         "options": {"mode": "concat", "source_item_ids": ["source-a", "source-b"], "clip_count": 2},
     }
+
+
+def _stream_token_from_url(stream_url: str) -> str:
+    parsed = urlparse(stream_url)
+    values = parse_qs(parsed.query).get("token") or []
+    assert values
+    return values[0]
+
+
+def _decoded_stream_token_payload(stream_url: str) -> dict:
+    token = _stream_token_from_url(stream_url)
+    payload_part = token.split(".", 1)[0]
+    padded = payload_part + "=" * (-len(payload_part) % 4)
+    return json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+
+
+async def create_stream_url(client, auth_headers, work, item) -> str:
+    response = await client.post(
+        f"/api/v1/works/{work['id']}/items/{item['id']}/stream-token",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["expires_in"] == 300
+    assert payload["stream_url"]
+    return payload["stream_url"]
 
 
 async def current_user_id(db_session):
@@ -444,6 +490,194 @@ async def test_work_item_media_ignores_object_key_query(client, auth_headers, db
         f"/api/v1/works/{work['id']}/items/{item['id']}/preview?object_key=uploads/evil.mp4",
         headers=auth_headers,
     )
+
+    assert response.status_code == 200
+    assert response.content == MEDIA_BYTES
+    assert storage.requested_keys == [FINAL_OBJECT_KEY]
+
+
+
+@pytest.mark.asyncio
+async def test_owner_can_create_work_item_stream_token(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+
+    response = await client.post(
+        f"/api/v1/works/{work['id']}/items/{item['id']}/stream-token",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["expires_in"] == 300
+    assert payload["stream_url"].startswith(f"/api/v1/works/{work['id']}/items/{item['id']}/stream?token=")
+    token_payload = _decoded_stream_token_payload(payload["stream_url"])
+    assert set(token_payload) == {"user_id", "work_id", "item_id", "exp"}
+    assert token_payload["work_id"] == work["id"]
+    assert token_payload["item_id"] == item["id"]
+    assert "object_key" not in token_payload
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_owner_can_stream_work_item_media_without_range(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    stream_url = await create_stream_url(client, auth_headers, work, item)
+
+    response = await client.get(stream_url)
+
+    assert response.status_code == 200
+    assert response.content == MEDIA_BYTES
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-length"] == str(len(MEDIA_BYTES))
+    assert response.headers["content-type"].startswith("video/mp4")
+    assert storage.get_object_calls == [{"object_key": FINAL_OBJECT_KEY, "offset": 0, "length": 0}]
+    assert storage.put_calls == []
+    assert storage.delete_calls == []
+
+
+@pytest.mark.asyncio
+async def test_owner_can_stream_work_item_media_with_range(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    stream_url = await create_stream_url(client, auth_headers, work, item)
+
+    response = await client.get(stream_url, headers={"Range": "bytes=0-3"})
+
+    assert response.status_code == 206
+    assert response.content == MEDIA_BYTES[:4]
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-range"] == f"bytes 0-3/{len(MEDIA_BYTES)}"
+    assert response.headers["content-length"] == "4"
+    assert storage.get_object_calls == [{"object_key": FINAL_OBJECT_KEY, "offset": 0, "length": 4}]
+
+
+@pytest.mark.asyncio
+async def test_owner_can_stream_work_item_media_with_open_range(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    stream_url = await create_stream_url(client, auth_headers, work, item)
+
+    response = await client.get(stream_url, headers={"Range": "bytes=5-"})
+
+    assert response.status_code == 206
+    assert response.content == MEDIA_BYTES[5:]
+    assert response.headers["content-range"] == f"bytes 5-{len(MEDIA_BYTES) - 1}/{len(MEDIA_BYTES)}"
+    assert response.headers["content-length"] == str(len(MEDIA_BYTES) - 5)
+    assert storage.get_object_calls == [{"object_key": FINAL_OBJECT_KEY, "offset": 5, "length": len(MEDIA_BYTES) - 5}]
+
+
+@pytest.mark.asyncio
+async def test_owner_can_stream_work_item_media_with_suffix_range(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    stream_url = await create_stream_url(client, auth_headers, work, item)
+    suffix_length = 5
+    start = len(MEDIA_BYTES) - suffix_length
+
+    response = await client.get(stream_url, headers={"Range": f"bytes=-{suffix_length}"})
+
+    assert response.status_code == 206
+    assert response.content == MEDIA_BYTES[-suffix_length:]
+    assert response.headers["content-range"] == f"bytes {start}-{len(MEDIA_BYTES) - 1}/{len(MEDIA_BYTES)}"
+    assert response.headers["content-length"] == str(suffix_length)
+    assert storage.get_object_calls == [{"object_key": FINAL_OBJECT_KEY, "offset": start, "length": suffix_length}]
+
+
+@pytest.mark.asyncio
+async def test_invalid_stream_range_returns_416(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    stream_url = await create_stream_url(client, auth_headers, work, item)
+
+    response = await client.get(stream_url, headers={"Range": "bytes=999-1000"})
+
+    assert response.status_code == 416
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-range"] == f"bytes */{len(MEDIA_BYTES)}"
+    assert storage.get_object_calls == []
+
+
+@pytest.mark.asyncio
+async def test_stream_requires_valid_token(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+
+    missing = await client.get(f"/api/v1/works/{work['id']}/items/{item['id']}/stream")
+    invalid = await client.get(f"/api/v1/works/{work['id']}/items/{item['id']}/stream?token=invalid")
+
+    assert missing.status_code in {401, 403}
+    assert invalid.status_code in {401, 403}
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_stream_rejects_expired_token(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    stream_url = await create_stream_url(client, auth_headers, work, item)
+    token_payload = _decoded_stream_token_payload(stream_url)
+    monkeypatch.setattr("src.api.v1.works.time.time", lambda: token_payload["exp"] + 1)
+
+    response = await client.get(stream_url)
+
+    assert response.status_code in {401, 403}
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_stream_rejects_path_mismatch_token(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    first_work, first_item = await archive_media_work(client, auth_headers, db_session)
+    second_work, second_item = await archive_media_work(client, auth_headers, db_session)
+    stream_url = await create_stream_url(client, auth_headers, first_work, first_item)
+    token = _stream_token_from_url(stream_url)
+
+    response = await client.get(
+        f"/api/v1/works/{second_work['id']}/items/{second_item['id']}/stream?token={token}"
+    )
+
+    assert response.status_code in {401, 403}
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_non_owner_cannot_create_stream_token(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    second_headers = await create_second_user_headers(client)
+
+    response = await client.post(
+        f"/api/v1/works/{work['id']}/items/{item['id']}/stream-token",
+        headers=second_headers,
+    )
+
+    assert response.status_code == 404
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_wrong_item_cannot_create_stream_token(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES})
+    work, _item = await archive_media_work(client, auth_headers, db_session)
+
+    response = await client.post(
+        f"/api/v1/works/{work['id']}/items/{uuid.uuid4()}/stream-token",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+    assert storage.requested_keys == []
+
+
+@pytest.mark.asyncio
+async def test_stream_ignores_object_key_query(client, auth_headers, db_session, monkeypatch):
+    storage = install_fake_storage(monkeypatch, {FINAL_OBJECT_KEY: MEDIA_BYTES, "uploads/evil.mp4": b"evil"})
+    work, item = await archive_media_work(client, auth_headers, db_session)
+    stream_url = await create_stream_url(client, auth_headers, work, item)
+
+    response = await client.get(f"{stream_url}&object_key=uploads/evil.mp4")
 
     assert response.status_code == 200
     assert response.content == MEDIA_BYTES
