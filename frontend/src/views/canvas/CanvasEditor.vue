@@ -3932,6 +3932,15 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
       return
     }
 
+    if (
+      item?.item_type !== 'video' ||
+      item?.last_run_status !== 'completed' ||
+      !isCanvasFinalVideoItem(item)
+    ) {
+      ElMessage.error('只有 Canvas compose final 可以归档为作品')
+      return
+    }
+
     if (archiveWorkPendingItemId.value) {
       return
     }
@@ -3939,10 +3948,13 @@ import CanvasTextStudio from '@/components/canvas/CanvasTextStudio.vue'
     archiveWorkPendingItemId.value = itemId
 
     try {
-      videoStudioRef.value?.flushDraft?.()
-
-      if (dirty.value) {
-        await save()
+      try {
+        videoStudioRef.value?.flushDraft?.()
+      } catch (flushError) {
+        console.warn(
+          '[Canvas] flush draft before archive failed, continuing archive request',
+          flushError
+        )
       }
 
       const response = await worksService.createWorkFromCanvasFinal({
