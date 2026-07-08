@@ -51,6 +51,10 @@ export const worksService = {
     return workItemMediaPath(workId, itemId, 'download')
   },
 
+  createWorkItemStreamToken(workId, itemId) {
+    return post(workItemMediaPath(workId, itemId, 'stream-token'))
+  },
+
   fetchWorkItemPreviewBlob(workId, itemId) {
     return api.get(this.getWorkItemPreviewPath(workId, itemId), { responseType: 'blob' })
   },

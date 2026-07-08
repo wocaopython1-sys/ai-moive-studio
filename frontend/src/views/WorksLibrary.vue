@@ -206,9 +206,6 @@
           controls
         />
         <el-empty v-else :description="mediaPreviewMessage || '不支持内联预览，请下载查看'" />
-        <p v-if="mediaPreviewType === 'video'" class="work-media-preview__hint">
-          视频 seek 暂不保证，stream/range 未实现。
-        </p>
       </div>
     </el-dialog>
   </section>
@@ -232,6 +229,7 @@ const previewingItemId = ref('')
 const downloadingItemId = ref('')
 const mediaPreviewVisible = ref(false)
 const mediaPreviewUrl = ref('')
+const mediaPreviewUrlIsObjectUrl = ref(false)
 const mediaPreviewTitle = ref('媒体预览')
 const mediaPreviewType = ref('')
 const mediaPreviewMessage = ref('')
@@ -317,10 +315,11 @@ const mediaErrorMessage = (error, action) => {
 }
 
 const revokeMediaPreviewUrl = () => {
-  if (mediaPreviewUrl.value) {
+  if (mediaPreviewUrl.value && mediaPreviewUrlIsObjectUrl.value) {
     URL.revokeObjectURL(mediaPreviewUrl.value)
-    mediaPreviewUrl.value = ''
   }
+  mediaPreviewUrl.value = ''
+  mediaPreviewUrlIsObjectUrl.value = false
 }
 
 const resetMediaPreview = () => {
@@ -376,8 +375,23 @@ const previewWorkItem = async (item = {}) => {
 
   previewingItemId.value = itemId
   try {
+    if (mediaType === 'video') {
+      const response = await worksService.createWorkItemStreamToken(workId, itemId)
+      const streamUrl = String(response?.stream_url || '').trim()
+      if (!streamUrl) {
+        mediaPreviewMessage.value = '视频预览地址获取失败'
+        mediaPreviewVisible.value = true
+        return
+      }
+      mediaPreviewUrl.value = streamUrl
+      mediaPreviewUrlIsObjectUrl.value = false
+      mediaPreviewVisible.value = true
+      return
+    }
+
     const blob = await worksService.fetchWorkItemPreviewBlob(workId, itemId)
     mediaPreviewUrl.value = URL.createObjectURL(blob)
+    mediaPreviewUrlIsObjectUrl.value = true
     mediaPreviewVisible.value = true
   } catch (error) {
     ElMessage.error(mediaErrorMessage(error, '预览'))
